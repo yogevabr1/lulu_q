@@ -29,10 +29,16 @@ const otherKeys = await crypto.subtle.generateKey(
   { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
   true, ['sign', 'verify']);
 
-globalThis.fetch = async (url) => {
+const pushes = [];
+globalThis.fetch = async (url, opts) => {
   if (String(url) === `https://${TEAM}/cdn-cgi/access/certs`) return new Response(JSON.stringify({ keys: [pubJwk] }));
+  if (String(url).startsWith('https://push.example/')) { pushes.push({ url: String(url), auth: opts.headers.Authorization }); return new Response(null, { status: 201 }); }
+  if (String(url).startsWith('https://gone.example/')) return new Response(null, { status: 410 });
   throw new Error('unexpected fetch ' + url);
 };
+const waits = [];
+const ctx = { waitUntil: (p) => waits.push(p) };
+const flush = async () => { while (waits.length) await waits.shift(); };
 
 async function jwt(email, { aud = AUD, exp = Math.floor(Date.now() / 1000) + 3600, key = keys.privateKey, iss = `https://${TEAM}` } = {}) {
   const h = b64url(JSON.stringify({ alg: 'RS256', kid: 'k1', typ: 'JWT' }));
@@ -53,7 +59,7 @@ async function call(path, { token, method = 'GET', body, lulu, envOverride } = {
   if (token) headers['Cf-Access-Jwt-Assertion'] = token;
   if (lulu) headers['X-Lulu-Token'] = lulu;
   if (body) headers['Content-Type'] = 'application/json';
-  const res = await worker.fetch(new Request('https://lulu-q.example.workers.dev' + path, { method, headers, body: body ? JSON.stringify(body) : undefined }), envOverride || env);
+  const res = await worker.fetch(new Request('https://lulu-q.example.workers.dev' + path, { method, headers, body: body ? JSON.stringify(body) : undefined }), envOverride || env, ctx);
   const text = await res.text();
   let data; try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data, res };
@@ -160,4 +166,99 @@ test('five wrong PINs lock the account for a while', async () => {
   const r = await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } });
   assert.equal(r.status, 429);
   assert.ok(r.data.until > Date.now());
+});
+
+test('cards: vetoes, green cards, house-free, sending, rewards, pause, push', async () => {
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  // The slave was locked out by the previous test; reset that for this one.
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+
+  let r = await call('/api/cards', { token: SLAVE, lulu: s });
+  const byId = (id) => r.data.cards.find((c) => c.id === id);
+  assert.ok(r.data.cards.length > 100);
+  assert.equal(byId('pu01').enabled, true);           // ordinary card: allowed by default
+  assert.equal(byId('hu35').enabled, false);          // green card: locked until both say yes
+  assert.equal(byId('wa01').enabled, false);          // whole water deck is green
+  assert.ok(!r.data.cards.some((c) => c.title === 'בלי מסכים'));
+
+  // Either one can veto; only your own vote changes.
+  r = await call('/api/cards/pu01/vote', { token: SLAVE, lulu: s, method: 'POST', body: { ok: false } });
+  assert.equal(byId('pu01').enabled, false);
+  assert.equal(byId('pu01').votes.slave, 0);
+  assert.equal(byId('pu01').votes.queen, null);
+  r = await call('/api/cards/pu01/vote', { token: SLAVE, lulu: s, method: 'POST', body: { ok: null } });
+  assert.equal(byId('pu01').enabled, true);
+
+  // Green needs both.
+  r = await call('/api/cards/hu35/vote', { token: QUEEN, lulu: q, method: 'POST', body: { ok: true } });
+  assert.equal(byId('hu35').enabled, false);
+  r = await call('/api/cards/hu35/vote', { token: SLAVE, lulu: s, method: 'POST', body: { ok: true } });
+  assert.equal(byId('hu35').enabled, true);
+
+  // Only the queen sends; vetoed cards and private cards are refused.
+  assert.equal((await call('/api/cards/pu02/send', { token: SLAVE, lulu: s, method: 'POST' })).status, 403);
+  assert.equal((await call('/api/cards/wa01/send', { token: QUEEN, lulu: q, method: 'POST' })).data.error, 'card not allowed');
+  assert.equal((await call('/api/cards/hu35/send', { token: QUEEN, lulu: q, method: 'POST' })).data.error, 'house not free');
+  assert.equal((await call('/api/cards/fe13/send', { token: QUEEN, lulu: q, method: 'POST' })).data.error, 'house not free');
+  assert.equal((await call('/api/settings', { token: SLAVE, lulu: s, method: 'POST', body: { homeFree: true } })).status, 403);
+  r = await call('/api/settings', { token: QUEEN, lulu: q, method: 'POST', body: { homeFree: true } });
+  assert.equal(r.data.settings.homeFree, true);
+
+  // Push subscription, then sending a card notifies the slave.
+  await call('/api/push/subscribe', { token: SLAVE, lulu: s, method: 'POST', body: { endpoint: 'https://push.example/slave-1' } });
+  await call('/api/push/subscribe', { token: QUEEN, lulu: q, method: 'POST', body: { endpoint: 'https://gone.example/queen-old' } });
+  pushes.length = 0;
+  r = await call('/api/cards/hu35/send', { token: QUEEN, lulu: q, method: 'POST', body: { deadline: Date.now() + 3600e3 } });
+  await flush();
+  const sent = r.data.decrees.find((d) => d.kind === 'card');
+  assert.equal(sent.title, 'הפה');
+  assert.equal(sent.deck, 'humil');
+  assert.equal(sent.severity, 'royal');
+  assert.equal(pushes.length, 1);
+  assert.equal(pushes[0].url, 'https://push.example/slave-1');
+  assert.match(pushes[0].auth, /^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
+
+  // Completing a punishment card earns no points.
+  const before = r.data.points.total;
+  await call(`/api/decrees/${sent.id}/submit`, { token: SLAVE, lulu: s, method: 'POST' });
+  await flush();
+  r = await call(`/api/decrees/${sent.id}/approve`, { token: QUEEN, lulu: q, method: 'POST' });
+  assert.equal(r.data.points.total, before);
+
+  // A dead push endpoint gets removed.
+  await call('/api/push/test', { token: QUEEN, lulu: q, method: 'POST' }); await flush();
+  assert.equal((await env.DB.prepare(`SELECT COUNT(*) AS c FROM push_subs WHERE role = 'queen'`).first()).c, 0);
+
+  // Rewards go through the same flow.
+  r = await call('/api/cards/re06/send', { token: QUEEN, lulu: q, method: 'POST' });
+  assert.equal(r.data.decrees.find((d) => d.kind === 'reward').title, 'שבח');
+
+  // Custom card: queen only, slave can veto it.
+  assert.equal((await call('/api/cards', { token: SLAVE, lulu: s, method: 'POST', body: { title: 'x', deck: 'punish' } })).status, 403);
+  r = await call('/api/cards', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'כריעת הבוקר', text: 'עשר דקות', deck: 'punish', lvl: 1 } });
+  const mine = r.data.cards.find((c) => c.custom);
+  assert.equal(mine.title, 'כריעת הבוקר');
+  r = await call(`/api/cards/${mine.id}/vote`, { token: SLAVE, lulu: s, method: 'POST', body: { ok: false } });
+  assert.equal(r.data.cards.find((c) => c.id === mine.id).enabled, false);
+
+  // Pause: either can pull it; nothing new can be ordered while it's on.
+  r = await call('/api/settings', { token: SLAVE, lulu: s, method: 'POST', body: { paused: true } });
+  assert.equal(r.data.settings.paused, true);
+  assert.equal(r.data.settings.pausedBy, 'slave');
+  assert.equal((await call('/api/decrees', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'x' } })).data.error, 'paused');
+  assert.equal((await call('/api/cards/pu02/send', { token: QUEEN, lulu: q, method: 'POST' })).data.error, 'paused');
+  await call('/api/settings', { token: QUEEN, lulu: q, method: 'POST', body: { paused: false } });
+  assert.equal((await call('/api/decrees', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'אחרי ההפוגה', deadline: Date.now() + 30 * 60e3 } })).status, 200);
+});
+
+test('scheduled reminders fire once per decree', async () => {
+  await flush();
+  pushes.length = 0;
+  const { runSchedule } = await import('../src/worker.js');
+  await runSchedule(env);
+  const firstRound = pushes.length;
+  assert.ok(firstRound >= 1);
+  await runSchedule(env);
+  assert.equal(pushes.length, firstRound);
 });

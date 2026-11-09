@@ -8,7 +8,8 @@ const POLL_MS = 30 * 1000;
 const S = {
   me: null, token: null, data: null, tab: 'decrees', sheet: null,
   pin: '', pinMode: 'unlock', pinFirst: '', pinMsg: '', pinBad: false, busy: false,
-  hiddenAt: 0, toast: '', draft: null
+  hiddenAt: 0, toast: '', draft: null,
+  cards: null, deck: 'punish', level: 0, drawn: null, limDeck: 'punish', cardDraft: null, pushState: ''
 };
 
 // ---------- helpers ----------
@@ -16,6 +17,9 @@ const S = {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const SEV = { request: 'בקשה', command: 'פקודה', royal: 'צו מלכותי' };
+const DECK_LABEL = { punish: 'עונש', humil: 'השפלה', pain: 'כאב', feet: 'רגליים', rules: 'חוקי היום', reward: 'פרס', water: 'מים' };
+const DECK_ORDER = ['punish', 'humil', 'pain', 'feet', 'rules', 'reward', 'water'];
+const dots = (n) => '◆'.repeat(n) + '◇'.repeat(3 - n);
 const STATUS_Q = { open: 'בביצוע', submitted: 'ממתין לחותמך', overdue: 'באיחור', done: 'אושר' };
 const STATUS_S = { open: 'בביצוע', submitted: 'הוגש', overdue: 'באיחור', done: 'אושר' };
 
@@ -56,6 +60,10 @@ const icon = {
   plus: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#f6ece0" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
   x: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#b8a690" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   check: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c9a45c" stroke-width="2" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>',
+  pause: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>',
+  cards: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="5" width="11" height="16" rx="1"/><path d="M9 3h10a1 1 0 0 1 1 1v14"/></svg>',
+  book: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 21V5M8 7h7"/></svg>',
+  home: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 11l9-7 9 7v9H3z"/></svg>',
   warn: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#e8828f" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" style="flex:none"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/></svg>'
 };
 
@@ -162,6 +170,7 @@ async function enterCourt() {
   setCourt();
   app.innerHTML = '';
   await refresh();
+  checkPush();
 }
 
 async function refresh() {
@@ -174,7 +183,15 @@ function render() {
   if (!S.token) return renderLock();
   if (!S.data) return;
   const q = S.me.role === 'queen';
-  const body = S.tab === 'points' ? pointsView(q) : (q ? queenDecrees() : slaveDecrees());
+  const st = S.data.settings || {};
+  const body = S.tab === 'points' ? pointsView(q)
+    : S.tab === 'cards' && q ? cardsView()
+    : S.tab === 'limits' ? limitsView(q)
+    : (q ? queenDecrees() : slaveDecrees());
+  const pauseBanner = st.paused ? `<div class="banner gold" role="status" style="justify-content:space-between;align-items:center">
+      <span><strong>הפוגה פעילה.</strong> הכול מוקפא${st.pausedBy ? ` — ${st.pausedBy === S.me.role ? 'הפעלת' : (st.pausedBy === 'queen' ? 'המלכה הפעילה' : 'העבד הפעיל')}` : ''}.</span>
+      <button class="btn" data-act="unpause" style="min-height:40px;flex:none">חזרה</button>
+    </div>` : '';
   app.innerHTML = `
     <div class="shell">
       <header class="top">
@@ -185,9 +202,12 @@ function render() {
             <h1 class="title">${q ? 'חדר הכס' : 'יומן העבד'}</h1>
           </div>
         </div>
-        <button class="btn quiet" data-act="lock" aria-label="נעילה" style="min-width:44px;padding:8px 10px">${icon.lock}</button>
+        <div style="display:flex;gap:6px">
+          ${st.paused ? '' : `<button class="btn quiet" data-act="pause" aria-label="הפוגה — לעצור הכול" title="הפוגה" style="min-width:44px;padding:8px 10px">${icon.pause}</button>`}
+          <button class="btn quiet" data-act="lock" aria-label="נעילה" style="min-width:44px;padding:8px 10px">${icon.lock}</button>
+        </div>
       </header>
-      <main class="main">${body}<div class="foot">◆ דבר המלכה הוא חוק ◆</div></main>
+      <main class="main">${pauseBanner}${body}<div class="foot">◆ דבר המלכה הוא חוק ◆</div></main>
       ${navView(q)}
     </div>
     ${S.sheet ? sheetView() : ''}
@@ -197,15 +217,18 @@ function render() {
 function navView(q) {
   const on = (t) => (S.tab === t ? ' on' : '');
   if (q) {
-    return `<nav class="nav"><div class="in">
+    return `<nav class="nav"><div class="in" style="grid-template-columns:repeat(5,minmax(0,1fr))">
       <button class="${on('decrees')}" data-act="tab" data-tab="decrees">${icon.scroll}צווים</button>
+      <button class="${on('cards')}" data-act="tab" data-tab="cards">${icon.cards}קלפים</button>
       <div><button class="fab" data-act="new" aria-label="גזירה חדשה">${icon.plus}</button></div>
       <button class="${on('points')}" data-act="tab" data-tab="points">${icon.coin}נקודות</button>
+      <button class="${on('limits')}" data-act="tab" data-tab="limits">${icon.book}חוקים</button>
     </div></nav>`;
   }
-  return `<nav class="nav"><div class="in" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+  return `<nav class="nav"><div class="in">
     <button class="${on('decrees')}" data-act="tab" data-tab="decrees">${icon.scroll}צווים</button>
     <button class="${on('points')}" data-act="tab" data-tab="points">${icon.coin}נקודות</button>
+    <button class="${on('limits')}" data-act="tab" data-tab="limits">${icon.book}חוקים</button>
   </div></nav>`;
 }
 
@@ -216,24 +239,28 @@ function card(d, q, now) {
     : d.status === 'submitted' ? 'הוגש ' + fmtWhen(d.submittedAt)
     : d.deadline != null ? `עד ${fmtWhen(d.deadline)} · ${rel(d.deadline, now)}` : 'ללא מועד';
   const statusTxt = (q ? STATUS_Q : STATUS_S)[d.status];
+  const reward = d.kind === 'reward';
   let actions = '';
   if (q) {
-    if (d.status === 'submitted') actions = `<div class="row2"><button class="btn gold" data-act="approve" data-id="${d.id}">אשרי ביצוע</button><button class="btn red" data-act="reject" data-id="${d.id}">לא מספיק טוב</button></div>`;
+    if (d.status === 'submitted' && reward) actions = `<div class="row2"><button class="btn gold" data-act="approve" data-id="${d.id}">אשרי מימוש</button><button class="btn quiet" data-act="reject" data-id="${d.id}">לא עכשיו</button></div>`;
+    else if (d.status === 'submitted') actions = `<div class="row2"><button class="btn gold" data-act="approve" data-id="${d.id}">אשרי ביצוע</button><button class="btn red" data-act="reject" data-id="${d.id}">לא מספיק טוב</button></div>`;
     else if (late) {
       const sent = d.remindedAt && now - d.remindedAt < 12 * 3600 * 1000;
       actions = `<button class="btn red" data-act="remind" data-id="${d.id}" ${sent ? 'disabled' : ''}>${sent ? 'התזכורת נשלחה' : 'שלחי תזכורת חמורה'}</button>`;
     }
     if (d.status !== 'done') actions += `<button class="link" data-act="del" data-id="${d.id}">בטלי את הצו</button>`;
   } else {
-    if (d.status === 'open' || late) actions = `<button class="btn" data-act="submit" data-id="${d.id}" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.check}ביצעתי — הגש לאישורה</button>`;
-    else if (d.status === 'submitted') actions = `<span class="st submitted">ממתין לחותם המלכה…</span>`;
-    else actions = `<span class="st">המלכה מרוצה</span>`;
+    if (reward && (d.status === 'open' || late)) actions = `<button class="btn gold" data-act="submit" data-id="${d.id}">לבקש לממש</button>`;
+    else if (d.status === 'open' || late) actions = `<button class="btn" data-act="submit" data-id="${d.id}" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.check}ביצעתי — הגש לאישורה</button>`;
+    else if (d.status === 'submitted') actions = `<span class="st submitted">${reward ? 'ממתין לאישור המלכה…' : 'ממתין לחותם המלכה…'}</span>`;
+    else actions = `<span class="st">${reward ? 'מומש' : 'המלכה מרוצה'}</span>`;
   }
-  const note = d.note ? `<p class="quote">${q ? 'הערתך' : 'הוראות המלכה'}: ${esc(d.note)}</p>` : '';
+  const label = d.kind === 'card' || reward ? `<span class="sev ${reward ? 'command' : d.severity}">${reward ? 'פרס מהמלכה' : 'קלף · ' + esc(DECK_LABEL[d.deck] || '')}</span>` : `<span class="sev ${d.severity}">${SEV[d.severity]}</span>`;
+  const note = d.note ? `<p class="quote">${d.kind !== 'decree' ? '' : q ? 'הערתך: ' : 'הוראות המלכה: '}${esc(d.note)}</p>` : '';
   const report = d.status === 'submitted' && d.report ? `<p class="quote">דיווח העבד: ${esc(d.report)}</p>` : '';
   const rejected = d.status !== 'done' && d.status !== 'submitted' && d.rejectReason ? `<p class="quote red">${q ? 'דחית' : 'המלכה דחתה'}: ${esc(d.rejectReason)}</p>` : '';
   return `<article class="card ${d.status}">
-    <div class="meta"><span class="sev ${d.severity}">${SEV[d.severity]}</span><span class="st ${d.status}">${statusTxt}</span></div>
+    <div class="meta">${label}<span class="st ${d.status}">${statusTxt}</span></div>
     <h3>${esc(d.title)}</h3>
     <span class="when${late ? ' late' : ''}">${when}</span>
     ${note}${report}${rejected}${actions}
@@ -313,6 +340,172 @@ function pointsView(q) {
     <div class="ledger">${ledger}</div>`;
 }
 
+// ---------- cards (queen) ----------
+
+async function loadCards() {
+  const r = await api('/cards');
+  if (r.cards) { S.cards = r; if (S.data) S.data.settings = r.settings; render(); }
+}
+
+function chipRow(items, current, act, attr) {
+  return `<div class="chiprow">${items.map(([k, label, extra = '']) =>
+    `<button class="chip${String(current) === String(k) ? ' on' : ''}${extra}" data-act="${act}" data-${attr}="${k}">${label}</button>`).join('')}</div>`;
+}
+
+function cardsView() {
+  if (!S.cards) return '<p class="empty">פותחת את החפיסה…</p>';
+  const st = S.data.settings;
+  const decks = S.cards.decks;
+  const inDeck = S.cards.cards.filter((c) => c.deck === S.deck);
+  const usable = inDeck.filter((c) => c.enabled);
+  const blocked = inDeck.length - usable.length;
+  const pool = usable.filter((c) => !S.level || c.lvl === S.level);
+  const locked = decks[S.deck].gated && !st.homeFree;
+  const drawn = S.drawn ? S.cards.cards.find((c) => c.id === S.drawn) : null;
+  const deckChips = chipRow(DECK_ORDER.map((k) => [k, DECK_LABEL[k], decks[k].gated ? ' gated' : '']), S.deck, 'deck', 'deck');
+  const lvlChips = chipRow([[0, 'הכול'], [1, '◆'], [2, '◆◆'], [3, '◆◆◆']], S.level, 'level', 'level');
+  let stage;
+  if (locked) {
+    stage = `<div class="bigcard red"><div class="mid">${icon.lock}<h2>החפיסה נעולה</h2><p>נפתחת רק כשמסומן "הבית פנוי".</p></div></div>`;
+  } else if (drawn) {
+    const home = drawn.needsHome && !st.homeFree;
+    stage = `<div class="bigcard${decks[drawn.deck].gated ? ' red' : ''}">
+      <div class="top2"><span>${DECK_LABEL[drawn.deck]} · ${dots(drawn.lvl)}</span><span class="glyph">R</span></div>
+      <div class="mid"><h2>${esc(drawn.title)}</h2><p>${esc(drawn.text)}</p></div>
+      ${drawn.deck === 'pain' ? '<p class="fine">ישבן וירכיים בלבד · סולם 1–10 · אפטרקר בסיום</p>' : ''}
+      ${home ? '<p class="fine">הקלף הזה רק כשהבית פנוי</p>' : ''}
+    </div>`;
+  } else {
+    stage = `<div class="bigcard"><div class="mid"><div class="mono big"><span>R</span></div><p>${pool.length} קלפים בחפיסת ${DECK_LABEL[S.deck]}</p></div></div>`;
+  }
+  const list = locked ? '' : pool.map((c) => `
+    <button class="cardrow${c.id === S.drawn ? ' on' : ''}" data-act="pick" data-card="${c.id}">
+      <span class="t">${esc(c.title)}${c.custom ? ' <em>שלך</em>' : ''}${c.needsHome && !decks[c.deck].gated ? ' <em>בית פנוי</em>' : ''}</span>
+      <span class="d">${dots(c.lvl)}</span>
+      <span class="x2">${esc(c.text)}</span>
+    </button>`).join('');
+  return `
+    <div class="homebar">
+      <button class="btn ${st.homeFree ? 'gold' : 'quiet'}" data-act="home" aria-pressed="${st.homeFree}">${icon.home} ${st.homeFree ? 'הבית פנוי' : 'הבית לא פנוי'}</button>
+      <button class="btn quiet" data-act="newCard">+ קלף משלך</button>
+    </div>
+    ${deckChips}
+    <div style="display:flex;align-items:center;gap:8px"><span class="when" style="flex:none">עוצמה</span>${lvlChips}</div>
+    ${stage}
+    ${locked ? '' : `<div class="row2">
+      <button class="btn blood" data-act="draw" ${pool.length ? '' : 'disabled'}>שלפי קלף</button>
+      <button class="btn" data-act="sendCard" ${drawn && !st.paused ? '' : 'disabled'}>הענקי לעבד</button>
+    </div>`}
+    <div class="sec"><h2>כל הקלפים בחפיסה</h2><span>${blocked ? `${blocked} פסולים או ממתינים — ב"חוקים"` : 'כולם מאושרים'}</span></div>
+    ${list || (locked ? '' : '<p class="empty">אין קלפים בעוצמה הזאת.</p>')}`;
+}
+
+// ---------- rules, limits, notifications (both) ----------
+
+const GUIDE = [
+  ['קודם כול: זה כלי, לא אנחנו', ['האפליקציה היא כלי עזר. הקשר קורה בינינו — במבט, במגע, בשיחה — לא על המסך.', 'מותר לכבות אותה לימים. אם היא מרגישה כמו חובה או מקור לריב — מניחים אותה בצד ומדברים.']],
+  ['העיקרון', ['המלכה גוזרת. העבד מבצע ומגיש. רק המלכה מאשרת.', 'לעבד אין הרשאה לערוך, לדחות או למחוק צו.']],
+  ['פרוטוקול', ['כשהפרוטוקול פעיל — פונים אליה רק "המלכה".', 'בכניסתה הביתה: לכרוע, להוריד נעליים, לנשק את כפות רגליה ולשאול "מה רצונך, המלכה?"', 'כל ערב: דיווח בכתב — מה בוצע, איפה נכשלת, איזה עונש מגיע לך.', 'שום החלטה קטנה בלי רשותה. הסמל שאתה עונד יורד רק בידיה.']],
+  ['נקודות צייתנות', ['בקשה 5+, פקודה 10+, צו מלכותי 20+. באיחור — חצי. מעבר לנדרש — בונוס.', 'פנייה בלי "המלכה" 5−. ויכוח, אנחה או גלגול עיניים 15−.', 'עונשים ופרסים לא שווים נקודות.', 'המרה בבקשה בלבד, והמלכה רשאית לסרב: 30 — לשבת לידה, 50 — לבחור מה תלבש מחר, 80 — ערב בלי פרוטוקול, 150 — ערב פינוק בתנאיה.']],
+  ['קלפים', ['עונש: על איחור, "לא מספיק טוב", או שלוש הפרות ביום. פרס: שבוע בלי איחור, או כשהמלכה רוצה.', 'השפלה, כאב ומים — ועוד כמה קלפים מסומנים — רק כשהבית פנוי.', 'עונש מבוצע עד סוף הערב או במועד שהמלכה קובעת, ואחרי שבוצע — נמחק. לא סוחבים חובות.']],
+  ['גבולות', ['כל אחד מכם יכול לפסול כל קלף, בכל רגע, בלי להסביר. קלף פסול לא נשלף.', 'קלפים מסומנים "ירוק" — וכל חפיסת המים — נעולים עד ששניכם מאשרים.']],
+  ['כאב', ['מכות: ישבן, ירכיים וכפות ידיים בלבד. לעולם לא כליות, עמוד שדרה, מפרקים או ראש.', 'מתחילים חלש. סולם 1–10: המלכה שואלת, העבד עונה, המלכה מחליטה.', 'שעווה רק מנר עיסוי מסויה. אטבים עד 20 דקות. פנים וצוואר — אף פעם לא חוסמים נשימה.', 'אחרי כל ◆◆◆: אפטרקר — 15 דקות של קרבה, מים ומילים טובות.']],
+  ['מים ויריקות', ['רק במקלחת. לא בפנים, לא בעיניים, לא שותים. שוטפים מיד.', 'פצע קור, הצטננות או דלקת — החפיסה סגורה.']],
+  ['מילת ביטחון', ['"צהוב" — להאט. "אדום" — עוצרים הכול, מיד.', 'כפתור ההפוגה למעלה עוצר את הכול באפליקציה — לכל אחד מכם, בכל רגע. מי שעוצר לא נענש.']],
+  ['דיסקרטיות', ['שום פרוטוקול ליד הילדים או לעיני אחרים. ההתראות בטלפון תמיד ניטרליות: "יש עדכון חדש".']]
+];
+
+function voteLabel(v, green) {
+  if (v === 1) return '<b class="ok">מאשר</b>';
+  if (v === 0) return '<b class="no">פוסל</b>';
+  return green ? '<b class="wait">עוד לא אישר</b>' : '<b class="ok">לא פסל</b>';
+}
+
+function limitsView(q) {
+  const me = S.me.role, them = q ? 'slave' : 'queen';
+  const themName = q ? 'העבד' : 'המלכה';
+  const pushTxt = S.pushState === 'on' ? 'התראות פעילות במכשיר הזה.'
+    : S.pushState === 'denied' ? 'ההתראות חסומות בהגדרות הטלפון. צריך לאפשר אותן שם.'
+    : S.pushState === 'ios' ? 'באייפון, התראות עובדות רק אחרי "הוספה למסך הבית" ופתיחה משם.'
+    : S.pushState === 'unsupported' ? 'הדפדפן הזה לא תומך בהתראות.'
+    : 'קבלו התראה ניטרלית ("יש עדכון חדש") על צו חדש, הגשה, אישור, תזכורת ומועד שמתקרב.';
+  const guide = GUIDE.map(([t, items], i) => `<details class="guide"${i === 0 ? ' open' : ''}><summary>${t}</summary>${items.map((x) => `<p>${esc(x)}</p>`).join('')}</details>`).join('');
+  let limits = '<p class="empty">טוען…</p>';
+  if (S.cards) {
+    const rows = S.cards.cards.filter((c) => c.deck === S.limDeck).map((c) => {
+      const mine = c.votes[me], theirs = c.votes[them];
+      return `<div class="limrow${c.enabled ? '' : ' off'}">
+        <div class="lt"><span class="t">${esc(c.title)}</span><span class="d">${dots(c.lvl)}${c.green ? ' · ירוק נדרש' : ''}${c.custom ? ' · של המלכה' : ''}</span></div>
+        <p>${esc(c.text)}</p>
+        <div class="lv">
+          <div class="mine">
+            <button class="vote${mine === 1 ? ' yes' : ''}" data-act="vote" data-card="${c.id}" data-v="1" aria-pressed="${mine === 1}">✓ מאשר</button>
+            <button class="vote${mine === 0 ? ' no' : ''}" data-act="vote" data-card="${c.id}" data-v="0" aria-pressed="${mine === 0}">✗ פוסל</button>
+          </div>
+          <span class="them">${themName}: ${voteLabel(theirs, c.green)}</span>
+        </div>
+        ${q && c.custom ? `<button class="link" data-act="delCard" data-card="${c.id}">מחיקת הקלף</button>` : ''}
+      </div>`;
+    }).join('');
+    limits = chipRow(DECK_ORDER.map((k) => [k, DECK_LABEL[k]]), S.limDeck, 'limDeck', 'deck') + rows;
+  }
+  return `
+    <section class="hero">
+      <span class="k">התראות</span>
+      <span class="when">${pushTxt}</span>
+      ${S.pushState === 'on' ? '<button class="btn quiet" data-act="pushTest">שליחת התראת בדיקה</button>' : S.pushState === 'denied' || S.pushState === 'unsupported' ? '' : '<button class="btn gold" data-act="pushOn">הפעלת התראות</button>'}
+    </section>
+    <div class="sec"><h2>ספר החוקים</h2><span>לשניכם</span></div>
+    ${guide}
+    <div class="sec"><h2>הגבולות שלי</h2><span>קלף שאחד מכם פוסל — לא נשלף</span></div>
+    ${limits}`;
+}
+
+// ---------- push ----------
+
+function pushSupport() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    return ios && !navigator.standalone ? 'ios' : 'unsupported';
+  }
+  if (Notification.permission === 'denied') return 'denied';
+  return 'ok';
+}
+
+async function checkPush() {
+  const s = pushSupport();
+  if (s !== 'ok') { S.pushState = s; return; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    S.pushState = sub && Notification.permission === 'granted' ? 'on' : '';
+    if (sub && S.token) api('/push/subscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
+  } catch { S.pushState = ''; }
+}
+
+function keyBytes(b64) {
+  const s = b64.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64.length + 3) % 4);
+  return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0));
+}
+
+async function enablePush() {
+  const s = pushSupport();
+  if (s !== 'ok') { S.pushState = s; return render(); }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { S.pushState = perm === 'denied' ? 'denied' : ''; return render(); }
+  const k = await api('/push/key');
+  if (!k.key) return toast('לא הצלחתי להפעיל. נסו שוב.');
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(k.key) });
+    const r = await api('/push/subscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
+    if (r.error) return toast('לא הצלחתי להפעיל. נסו שוב.');
+    S.pushState = 'on'; toast('ההתראות הופעלו');
+  } catch {
+    toast('לא הצלחתי להפעיל. נסו שוב.');
+  }
+}
+
 // ---------- sheets ----------
 
 function defaultDeadline() {
@@ -324,6 +517,29 @@ function sheetView() {
   const s = S.sheet;
   const close = `<button class="x" data-act="close" aria-label="סגירה">${icon.x}</button>`;
   if (s.type === 'pts') return customPointsSheet();
+  if (s.type === 'send') {
+    const c = S.cards?.cards.find((x) => x.id === s.card);
+    if (!c) return '';
+    const opts = [['none', 'בלי מועד'], ['now', 'תוך שעה'], ['tonight', 'עד הלילה'], ['tomorrow', 'עד מחר בערב']];
+    return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="הענקת קלף">
+      <div class="hd"><h2>${c.deck === 'reward' ? 'הענקת פרס' : 'גזירת קלף'}</h2>${close}</div>
+      <p class="quote">${esc(c.title)} — ${esc(c.text)}</p>
+      <div class="field"><span class="lbl">עד מתי</span><div class="chips" style="grid-template-columns:repeat(2,minmax(0,1fr))">${opts.map(([k, l]) => `<button class="chip${s.when === k ? ' on' : ''}" data-act="sendWhen" data-w="${k}">${l}</button>`).join('')}</div></div>
+      <button class="btn blood" data-act="doSend">${c.deck === 'reward' ? 'הענקי' : 'חתמי וגזרי'}</button>
+    </section></div>`;
+  }
+  if (s.type === 'newcard') {
+    const dc = S.cardDraft;
+    return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="קלף חדש">
+      <div class="hd"><h2>קלף חדש מהמלכה</h2>${close}</div>
+      <div class="field"><label for="c-title">שם הקלף</label><input id="c-title" maxlength="80" value="${esc(dc.title)}" placeholder="למשל: כריעת הבוקר"></div>
+      <div class="field"><label for="c-text">מה העבד צריך לעשות</label><textarea id="c-text" maxlength="500" placeholder="בדיוק, כולל כמה זמן ואיך…">${esc(dc.text)}</textarea></div>
+      <div class="field"><span class="lbl">חפיסה</span><div class="chips">${DECK_ORDER.map((k) => `<button class="chip${dc.deck === k ? ' on' : ''}" data-act="cdDeck" data-deck="${k}">${DECK_LABEL[k]}</button>`).join('')}</div></div>
+      <div class="field"><span class="lbl">עוצמה</span><div class="chips">${[1, 2, 3].map((n) => `<button class="chip${dc.lvl === n ? ' on' : ''}" data-act="cdLvl" data-lvl="${n}">${['קל', 'בינוני', 'חזק'][n - 1]}</button>`).join('')}</div></div>
+      <p class="when">העבד יכול לפסול כל קלף במסך "חוקים".</p>
+      <button class="btn blood" data-act="saveCard">הוסיפי לחפיסה</button>
+    </section></div>`;
+  }
   if (s.type === 'new') {
     const chips = Object.keys(SEV).map((k) => `<button class="chip${S.draft.severity === k ? ' on' : ''}" data-act="sev" data-sev="${k}">${SEV[k]}</button>`).join('');
     return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="גזירה חדשה">
@@ -384,6 +600,12 @@ function toast(msg) {
 
 // Keep what the queen typed when the sheet re-renders.
 function keepDraft() {
+  if (S.sheet && S.sheet.type === 'newcard') {
+    const t = document.getElementById('c-title'), x = document.getElementById('c-text');
+    if (t) S.cardDraft.title = t.value;
+    if (x) S.cardDraft.text = x.value;
+    return;
+  }
   if (!S.sheet || S.sheet.type !== 'new') return;
   const t = document.getElementById('f-title'), dl = document.getElementById('f-dl'), n = document.getElementById('f-note');
   if (t) S.draft.title = t.value;
@@ -411,9 +633,81 @@ app.addEventListener('click', async (e) => {
 
   switch (a) {
     case 'lock': return lock();
-    case 'tab': S.tab = el.dataset.tab; window.scrollTo(0, 0); return render();
+    case 'tab':
+      S.tab = el.dataset.tab; window.scrollTo(0, 0); render();
+      if (S.tab === 'cards' || S.tab === 'limits') loadCards();
+      if (S.tab === 'limits') { await checkPush(); render(); }
+      return;
+    case 'pause': case 'unpause': {
+      const r = await api('/settings', { method: 'POST', body: { paused: a === 'pause' } });
+      if (r.error) return toast('לא הצליח. נסו שוב.');
+      S.data = r; return toast(a === 'pause' ? 'הפוגה. הכול מוקפא.' : 'חוזרים');
+    }
+    case 'home': {
+      const r = await api('/settings', { method: 'POST', body: { homeFree: !S.data.settings.homeFree } });
+      if (r.error) return toast('לא הצליח.');
+      S.data = r; S.drawn = null; return render();
+    }
+    case 'deck': S.deck = el.dataset.deck; S.drawn = null; return render();
+    case 'level': S.level = Number(el.dataset.level); S.drawn = null; return render();
+    case 'pick': S.drawn = el.dataset.card; render(); return window.scrollTo({ top: 0, behavior: 'smooth' });
+    case 'draw': {
+      const pool = S.cards.cards.filter((c) => c.deck === S.deck && c.enabled && (!S.level || c.lvl === S.level));
+      if (!pool.length) return;
+      let c = pool[Math.floor(Math.random() * pool.length)];
+      if (pool.length > 1 && c.id === S.drawn) c = pool[(pool.indexOf(c) + 1) % pool.length];
+      S.drawn = c.id; return render();
+    }
+    case 'sendCard': if (!S.drawn) return; S.sheet = { type: 'send', card: S.drawn, when: S.deck === 'reward' ? 'none' : 'tonight' }; return render();
+    case 'sendWhen': S.sheet.when = el.dataset.w; return render();
+    case 'doSend': {
+      const n = new Date(); let dl = null;
+      if (S.sheet.when === 'now') dl = Date.now() + 3600 * 1000;
+      if (S.sheet.when === 'tonight') { n.setHours(23, 30, 0, 0); dl = Math.max(n.getTime(), Date.now() + 3600 * 1000); }
+      if (S.sheet.when === 'tomorrow') { n.setDate(n.getDate() + 1); n.setHours(20, 0, 0, 0); dl = n.getTime(); }
+      el.disabled = true;
+      const r = await api(`/cards/${S.sheet.card}/send`, { method: 'POST', body: { deadline: dl } });
+      if (r.error) {
+        S.sheet = null;
+        return toast(r.error === 'paused' ? 'הפוגה פעילה.' : r.error === 'house not free' ? 'הקלף הזה רק כשהבית פנוי.' : r.error === 'card not allowed' ? 'הקלף נפסל.' : 'לא הצליח. נסו שוב.');
+      }
+      S.drawn = null; S.tab = 'decrees';
+      return act(r, 'נגזר. העבד יקבל התראה.');
+    }
+    case 'newCard': S.cardDraft = { title: '', text: '', deck: S.deck, lvl: 2 }; S.sheet = { type: 'newcard' }; render(); return document.getElementById('c-title')?.focus();
+    case 'cdDeck': keepDraft(); S.cardDraft.deck = el.dataset.deck; return render();
+    case 'cdLvl': keepDraft(); S.cardDraft.lvl = Number(el.dataset.lvl); return render();
+    case 'saveCard': {
+      keepDraft();
+      if (!S.cardDraft.title.trim()) return document.getElementById('c-title')?.focus();
+      el.disabled = true;
+      const r = await api('/cards', { method: 'POST', body: S.cardDraft });
+      if (r.error) return toast('לא הצליח. נסו שוב.');
+      S.cards = r; S.sheet = null; S.deck = S.cardDraft.deck; S.level = 0;
+      const mine = r.cards.filter((c) => c.custom).pop(); S.drawn = mine ? mine.id : null;
+      return toast('הקלף נוסף לחפיסה');
+    }
+    case 'delCard': {
+      if (!confirm('למחוק את הקלף?')) return;
+      const r = await api(`/cards/${el.dataset.card}`, { method: 'DELETE' });
+      if (r.cards) { S.cards = r; render(); }
+      return;
+    }
+    case 'limDeck': S.limDeck = el.dataset.deck; return render();
+    case 'vote': {
+      const c = S.cards.cards.find((x) => x.id === el.dataset.card);
+      const v = Number(el.dataset.v);
+      const ok = c.votes[S.me.role] === v ? null : v === 1;
+      const r = await api(`/cards/${c.id}/vote`, { method: 'POST', body: { ok } });
+      if (r.cards) { S.cards = r; render(); } else toast('לא נשמר. נסו שוב.');
+      return;
+    }
+    case 'pushOn': return enablePush().then(render);
+    case 'pushTest': await api('/push/test', { method: 'POST' }); return toast('נשלחה התראת בדיקה');
     case 'backdrop': case 'close': S.sheet = null; return render();
-    case 'new': S.draft = { title: '', deadline: defaultDeadline(), note: '', severity: 'command' }; S.sheet = { type: 'new' }; render(); return document.getElementById('f-title')?.focus();
+    case 'new':
+      if (S.data.settings?.paused) return toast('הפוגה פעילה. אין גזירות עד החזרה.');
+      S.draft = { title: '', deadline: defaultDeadline(), note: '', severity: 'command' }; S.sheet = { type: 'new' }; render(); return document.getElementById('f-title')?.focus();
     case 'sev': keepDraft(); S.draft.severity = el.dataset.sev; return render();
     case 'create': {
       keepDraft();

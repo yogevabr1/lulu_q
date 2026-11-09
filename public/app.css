@@ -108,3 +108,48 @@ body.court .card p,body.court .when{line-height:1.5}
 .foot{text-align:center;font-size:12px;letter-spacing:.25em;color:var(--faint);padding-top:8px}
 .toast{position:fixed;left:50%;bottom:calc(100px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:20;background:var(--surface);border:1px solid var(--gold);color:var(--text);padding:10px 16px;font-size:14px;max-width:90vw}
 :focus-visible{outline:2px solid var(--gold,#0a84ff);outline-offset:2px}
+
+/* ---------- cards ---------- */
+.chiprow{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.chiprow::-webkit-scrollbar{display:none}
+.chiprow .chip{flex:none;padding:4px 14px;min-height:40px}
+.chip.gated{color:var(--rose)} .chip.gated.on{color:var(--ink)}
+.homebar{display:flex;gap:8px;justify-content:space-between}
+.homebar .btn{display:flex;align-items:center;gap:8px;min-height:40px}
+.bigcard{border:1px solid var(--gold);outline:1px solid var(--line);outline-offset:5px;margin:5px;background:var(--surface);min-height:250px;padding:16px 18px;display:flex;flex-direction:column;gap:10px}
+.bigcard.red{border-color:var(--blood)}
+.bigcard .top2{display:flex;justify-content:space-between;align-items:center;font-family:'Bellefair',Georgia,serif;color:var(--gold);font-size:14px;letter-spacing:.1em}
+.bigcard .glyph{font-family:'UnifrakturMaguntia',serif;font-size:22px}
+.bigcard .mid{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;color:var(--muted)}
+.bigcard h2{margin:0;font-family:'Frank Ruhl Libre',Georgia,serif;font-size:28px;font-weight:900;color:var(--text)}
+.bigcard p{margin:0;font-size:16px;line-height:1.55;color:var(--soft)}
+.bigcard .fine{font-size:12px;color:var(--rose);text-align:center;border-top:1px solid var(--line);padding-top:8px}
+.mono.big{width:80px;height:80px;margin-bottom:14px} .mono.big span{font-size:44px}
+.cardrow{display:grid;grid-template-columns:1fr auto;gap:4px 10px;text-align:right;background:var(--surface);border:1px solid var(--line);padding:12px 14px;color:var(--text);width:100%}
+.cardrow.on{border-color:var(--gold)}
+.cardrow .t{font-family:'Frank Ruhl Libre',Georgia,serif;font-size:17px;font-weight:700}
+.cardrow .t em{font-style:normal;font-family:'Assistant',sans-serif;font-size:11px;color:var(--gold);border:1px solid var(--line2);padding:1px 6px;margin-right:6px;vertical-align:middle}
+.cardrow .d{color:var(--gold);font-size:12px;letter-spacing:.1em}
+.cardrow .x2{grid-column:1/-1;font-size:13px;color:var(--muted);line-height:1.45}
+
+/* ---------- rules & limits ---------- */
+details.guide{border-bottom:1px solid var(--line);padding:4px 0}
+details.guide summary{cursor:pointer;list-style:none;font-family:'Frank Ruhl Libre',Georgia,serif;font-size:17px;font-weight:700;padding:10px 0;display:flex;justify-content:space-between}
+details.guide summary::-webkit-details-marker{display:none}
+details.guide summary::after{content:'◆';color:var(--gold);font-size:12px}
+details.guide[open] summary::after{content:'◇'}
+details.guide p{margin:0 0 10px;font-size:15px;line-height:1.55;color:var(--soft);padding-right:12px;border-right:1px solid var(--line2)}
+.limrow{background:var(--surface);border:1px solid var(--line);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.limrow.off{border-color:var(--blood)}
+.limrow .lt{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.limrow .t{font-family:'Frank Ruhl Libre',Georgia,serif;font-size:17px;font-weight:700}
+.limrow .d{font-size:12px;color:var(--gold)}
+.limrow p{margin:0;font-size:13px;color:var(--muted);line-height:1.45}
+.limrow .lv{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.limrow .mine{display:flex;gap:6px}
+.vote{min-height:40px;padding:4px 12px;font-size:14px;font-weight:700;background:transparent;border:1px solid var(--line2);color:var(--muted)}
+.vote.yes{background:var(--gold);border-color:var(--gold);color:var(--ink)}
+.vote.no{background:var(--blood);border-color:var(--blood);color:#f6ece0}
+.limrow .them{font-size:13px;color:var(--muted)}
+.them b.ok{color:var(--gold)} .them b.no{color:var(--rose)} .them b.wait{color:var(--faint)}
+.nav .in > *{min-width:0}

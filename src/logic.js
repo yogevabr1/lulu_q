@@ -4,9 +4,35 @@ export const SEVERITIES = ['request', 'command', 'royal'];
 export const BASE_POINTS = { request: 5, command: 10, royal: 20 };
 export const ROLES = ['queen', 'slave'];
 
+// ---------- cards ----------
+
+// A vote of null means "hasn't decided": ordinary cards count as allowed,
+// "green" cards count as not allowed until that person says yes.
+export function voteAllows(vote, green) {
+  if (vote === 1 || vote === true) return true;
+  if (vote === 0 || vote === false) return false;
+  return !green;
+}
+
+// A card can be used only if BOTH of you allow it. Either one can veto.
+export function cardEnabled(card, votes) {
+  return voteAllows(votes?.queen, card.green) && voteAllows(votes?.slave, card.green);
+}
+
+// Cards from private decks, or marked private, need "the house is free".
+export function cardNeedsHome(card, decks) {
+  return !!(card.priv || decks[card.deck]?.gated);
+}
+
+export function lvlToSeverity(lvl) {
+  return lvl >= 3 ? 'royal' : lvl === 2 ? 'command' : 'request';
+}
+
 // Points the slave earns when the queen approves a decree.
 // Late submission (after the deadline) earns half, rounded down.
-export function approvalPoints(severity, deadline, submittedAt) {
+export function approvalPoints(severity, deadline, submittedAt, kind = 'decree') {
+  // Punishments and rewards are not paid in points.
+  if (kind !== 'decree') return { points: 0, late: false };
   const base = BASE_POINTS[severity] ?? 0;
   const late = deadline != null && submittedAt != null && submittedAt > deadline;
   return { points: late ? Math.floor(base / 2) : base, late };
