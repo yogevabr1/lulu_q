@@ -366,27 +366,28 @@ test('offers, quick punishment, check-ins, mood, protocol, weekly summary', asyn
   assert.equal(r.data.settings.summary.dismissed, true);
 });
 
-test('expectation review: partner marks stay hidden until both finish', async () => {
+test('expectation review: you see the other mark on a card only after marking it yourself', async () => {
   await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
   const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
   const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
   await call('/api/cards/se01/vote', { token: QUEEN, lulu: q, method: 'POST', body: { ok: true } });
-  await call('/api/cards/se01/vote', { token: SLAVE, lulu: s, method: 'POST', body: { ok: false } });
 
   let r = await call('/api/cards', { token: SLAVE, lulu: s });
   let c = r.data.cards.find((x) => x.id === 'se01');
-  assert.equal(c.votes.slave, 0);
-  assert.equal(c.votes.queen, null);
+  assert.equal(c.votes.queen, null);          // hidden: the slave hasn't answered this card
   assert.equal(c.theirsHidden, true);
+  const slaveLeft = r.data.review.slaveLeft;
+  assert.ok(slaveLeft > 0);
 
-  r = await call('/api/review/done', { token: SLAVE, lulu: s, method: 'POST' });
-  assert.ok(r.data.review.slave);
-  assert.equal(r.data.cards.find((x) => x.id === 'se01').votes.queen, null); // still hidden
-
-  r = await call('/api/review/done', { token: QUEEN, lulu: q, method: 'POST' });
+  r = await call('/api/cards/se01/vote', { token: SLAVE, lulu: s, method: 'POST', body: { ok: false } });
   c = r.data.cards.find((x) => x.id === 'se01');
-  assert.deepEqual(c.votes, { queen: 1, slave: 0 });
+  assert.deepEqual(c.votes, { queen: 1, slave: 0 }); // both answered: visible
   assert.equal(c.enabled, false);
-  assert.ok(!c.theirsHidden);
-  assert.ok(r.data.cards.length >= 174);
+  assert.equal(r.data.review.slaveLeft, slaveLeft - 1);
+
+  // A new custom card shows up as unanswered for both.
+  const before = r.data.review.queenLeft;
+  r = await call('/api/cards', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'קלף חדש', deck: 'service', lvl: 1 } });
+  assert.equal(r.data.review.slaveLeft, slaveLeft);
+  assert.equal(r.data.review.queenLeft, before + 1);
 });

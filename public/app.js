@@ -372,79 +372,79 @@ function checkinResults() {
   </div>`).join('');
 }
 
-// ---------- expectation review: every card, one at a time ----------
+// ---------- expectation review: every unanswered card, one at a time ----------
 
 function reviewList() {
   if (!S.cards) return [];
   return [...S.cards.cards].sort((a, b) => DECK_ORDER.indexOf(a.deck) - DECK_ORDER.indexOf(b.deck) || a.lvl - b.lvl);
 }
-
-function reviewProgress() {
-  const list = reviewList();
-  const done = list.filter((c) => c.votes[S.me.role] === 0 || c.votes[S.me.role] === 1).length;
-  return { done, total: list.length };
-}
+const myVote = (c) => c.votes[S.me.role];
+const unanswered = () => reviewList().filter((c) => myVote(c) !== 0 && myVote(c) !== 1);
 
 function reviewBanner() {
-  if (!S.cards || S.cards.review?.[S.me.role]) return '';
-  const { done, total } = reviewProgress();
+  if (!S.cards) return '';
+  const left = unanswered().length;
+  if (!left) return '';
+  const total = reviewList().length;
   const q = S.me.role === 'queen';
+  const fresh = left === total;
   return `<section class="hero">
     <span class="k">תיאום ציפיות</span>
-    <h2 style="font-size:20px">${done ? `סימנת ${done} מתוך ${total} קלפים` : `${total} קלפים מחכים לך`}</h2>
-    <span class="when">עוברים על כל קלף ומסמנים ✓ רוצה או ✗ לא. ${q ? 'העבד' : 'המלכה'} לא רואה את הסימונים שלך עד ששניכם מסיימים.</span>
-    <button class="btn gold" data-act="reviewStart">${done ? 'להמשיך' : 'להתחיל'}</button>
+    <h2 style="font-size:20px">${fresh ? `${total} קלפים מחכים לך` : left === 1 ? 'קלף אחד שעוד לא סימנת' : `${left} קלפים שעוד לא סימנת`}</h2>
+    <span class="when">${fresh ? 'עוברים על כל קלף ומסמנים ✓ רוצה או ✗ לא.' : 'עוברים רק על הקלפים שעוד לא סימנת — כולל קלפים חדשים.'} ${q ? 'העבד' : 'המלכה'} רואה את הסימון שלך על קלף רק אחרי שסימן גם בעצמו.</span>
+    <button class="btn gold" data-act="reviewStart">${fresh ? 'להתחיל' : 'לסמן'}</button>
   </section>`;
 }
 
-async function startReview() {
+async function startReview(all) {
   if (!S.cards) await loadCards();
-  const list = reviewList();
-  let i = list.findIndex((c) => c.votes[S.me.role] !== 0 && c.votes[S.me.role] !== 1);
-  if (i < 0) i = list.length; // everything marked: go straight to the finish screen
-  S.review = { i };
+  const list = all ? reviewList() : unanswered();
+  S.review = { ids: list.map((c) => c.id), i: 0 };
   window.scrollTo(0, 0);
   render();
 }
 
+const reviewCards = () => S.review.ids.map((id) => S.cards.cards.find((c) => c.id === id)).filter(Boolean);
+
 async function reviewVote(ok) {
-  const list = reviewList();
+  const list = reviewCards();
   const c = list[S.review.i];
   if (!c) return;
   // Optimistic: move on at once, save in the background.
+  const prev = myVote(c);
   c.votes[S.me.role] = ok ? 1 : 0;
   S.review.i++;
   render();
   const r = await api(`/cards/${c.id}/vote`, { method: 'POST', body: { ok } });
-  if (r.error) { c.votes[S.me.role] = null; S.review.i = list.indexOf(c); toast('לא נשמר. נסו שוב.'); }
+  if (r.error) { c.votes[S.me.role] = prev; S.review.i = list.indexOf(c); toast('לא נשמר. נסו שוב.'); }
 }
 
 async function finishReview() {
   const r = await api('/review/done', { method: 'POST' });
-  if (r.error) return toast('לא נשמר. נסו שוב.');
-  S.cards = r; S.review = null; S.tab = 'limits';
+  if (r.cards) S.cards = r;
+  S.review = null; S.tab = 'limits';
   window.scrollTo(0, 0);
-  toast('סיימת');
+  toast('נשמר');
 }
 
 function renderReview() {
-  const list = reviewList();
+  const list = reviewCards();
   const i = S.review.i;
   const total = list.length;
-  const pct = Math.round((Math.min(i, total) / total) * 100);
+  const pct = total ? Math.round((Math.min(i, total) / total) * 100) : 100;
   let body;
   if (i >= total) {
-    const yes = list.filter((c) => c.votes[S.me.role] === 1).length;
+    const yes = list.filter((c) => myVote(c) === 1).length;
     body = `<div class="bigcard"><div class="mid">
         <div class="mono big"><span>R</span></div>
-        <h2>סיימת את כל הקלפים</h2>
+        <h2>סיימת</h2>
         <p>${yes} ✓ · ${total - yes} ✗</p>
-        <p>אחרי ששניכם תסיימו, תראו יחד על מה הסכמתם ועל מה כדאי לדבר.</p>
+        <p>ההשוואה מחכה במסך "חוקים" — על כל קלף ששניכם כבר סימנתם.</p>
       </div></div>
-      <div class="row2"><button class="btn quiet" data-act="rvBack">לחזור לקלף האחרון</button><button class="btn gold" data-act="rvFinish">סיום</button></div>`;
+      <div class="row2"><button class="btn quiet" data-act="rvBack" ${total ? '' : 'disabled'}>לחזור לקלף האחרון</button><button class="btn gold" data-act="rvFinish">לתוצאות</button></div>`;
   } else {
     const c = list[i];
-    const mine = c.votes[S.me.role];
+    const mine = myVote(c);
     const gated = S.cards.decks[c.deck]?.gated || c.needsHome;
     body = `<div class="bigcard${gated ? ' red' : ''}">
         <div class="top2"><span>${DECK_LABEL[c.deck] || ''} · ${dots(c.lvl)}</span><span class="glyph">R</span></div>
@@ -471,16 +471,25 @@ function renderReview() {
 
 function reviewResults() {
   if (!S.cards) return '';
-  const rv = S.cards.review || {};
-  const me = S.me.role, them = me === 'queen' ? 'slave' : 'queen';
+  const me = S.me.role;
   const themName = me === 'queen' ? 'העבד' : 'המלכה';
-  if (!rv[me]) return '';
-  if (!rv[them]) return `<div class="banner gold"><span><strong>תיאום ציפיות:</strong> סיימת. מחכים ל${themName === 'העבד' ? 'עבד' : 'מלכה'} — אז תראו יחד את התוצאות.</span></div>`;
+  const themLeft = me === 'queen' ? S.cards.review?.slaveLeft : S.cards.review?.queenLeft;
   const list = reviewList();
-  const both = list.filter((c) => c.votes.queen === 1 && c.votes.slave === 1);
-  const none = list.filter((c) => c.votes.queen === 0 && c.votes.slave === 0);
-  const split = list.filter((c) => (c.votes.queen === 1 && c.votes.slave === 0) || (c.votes.queen === 0 && c.votes.slave === 1));
+  const marked = (v) => v === 0 || v === 1;
+  const shared = list.filter((c) => marked(c.votes.queen) && marked(c.votes.slave));
+  const myLeft = unanswered().length;
+  if (!shared.length) {
+    if (myLeft) return '';
+    return `<div class="banner gold"><span><strong>תיאום ציפיות:</strong> סימנת הכול. ההשוואה תופיע כאן ברגע ש${themName} ${me === 'queen' ? 'יסמן' : 'תסמן'}.</span></div>`;
+  }
+  const both = shared.filter((c) => c.votes.queen === 1 && c.votes.slave === 1);
+  const none = shared.filter((c) => c.votes.queen === 0 && c.votes.slave === 0);
+  const split = shared.filter((c) => c.votes.queen !== c.votes.slave);
   const who = (c) => (c.votes.queen === 1 ? 'המלכה רוצה, העבד לא' : 'העבד רוצה, המלכה לא');
+  const waiting = [
+    myLeft ? `${myLeft} קלפים עוד מחכים לך` : '',
+    themLeft ? `${themLeft} קלפים עוד מחכים ל${themName === 'העבד' ? 'עבד' : 'מלכה'}` : ''
+  ].filter(Boolean).join(' · ');
   return `<section class="hero">
     <span class="k">תיאום ציפיות</span>
     <div class="stats">
@@ -488,11 +497,11 @@ function reviewResults() {
       <div class="stat${split.length ? ' red' : ''}"><b>${split.length}</b><span>לדבר עליהם</span></div>
       <div class="stat"><b>${none.length}</b><span>שניכם ✗</span></div>
     </div>
-    <span class="when">קלף שאחד מכם סימן ✗ לא נשלף. אפשר לשנות סימון בכל רגע ברשימה למטה.</span>
+    <span class="when">${waiting ? waiting + '. ' : ''}קלף שאחד מכם סימן ✗ לא נשלף. אפשר לשנות סימון בכל רגע ברשימה למטה.</span>
   </section>
   ${split.length ? `<div class="sec"><h2>על מה לדבר</h2><span>${split.length} קלפים</span></div>
     ${split.map((c) => `<div class="limrow off"><div class="lt"><span class="t">${esc(c.title)}</span><span class="d">${DECK_LABEL[c.deck]} · ${dots(c.lvl)}</span></div><p>${esc(c.text)}</p><p><strong style="color:var(--rose)">${who(c)}</strong></p></div>`).join('')}` : ''}
-  <button class="btn quiet" data-act="reviewStart">לעבור שוב על הקלפים</button>`;
+  <button class="btn quiet" data-act="reviewAll">לעבור שוב על כל הקלפים</button>`;
 }
 
 // ---------- the guide ("how it works"), different for each of you ----------
@@ -1114,7 +1123,8 @@ app.addEventListener('click', async (e) => {
     case 'tourNext': S.sheet.i++; return render();
     case 'tourBack': S.sheet.i = Math.max(0, S.sheet.i - 1); return render();
     case 'tourDone': try { localStorage.setItem('lulu_tour_' + S.me.role, '1'); } catch {} S.sheet = null; return render();
-    case 'reviewStart': return startReview();
+    case 'reviewStart': return startReview(false);
+    case 'reviewAll': return startReview(true);
     case 'rvYes': case 'rvNo': return reviewVote(a === 'rvYes');
     case 'rvBack': S.review.i = Math.max(0, S.review.i - 1); return render();
     case 'rvExit': S.review = null; window.scrollTo(0, 0); return render();

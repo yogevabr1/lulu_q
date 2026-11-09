@@ -186,20 +186,17 @@ function safeEqual(a, b) {
 
 // ---------- cards ----------
 
-// Expectation review: each of you marks every card. Until BOTH have finished,
-// neither sees the other's marks, so nobody answers to please the other.
-async function reviewState(db) {
-  const rows = (await db.prepare(`SELECT key, value FROM settings WHERE key IN ('reviewDone_queen', 'reviewDone_slave')`).all()).results;
-  const m = Object.fromEntries(rows.map((r) => [r.key, Number(r.value) || null]));
-  return { queen: m.reviewDone_queen || null, slave: m.reviewDone_slave || null };
-}
-
+// Expectation review: you only see the other's mark on a card once you have
+// marked that card yourself, so nobody answers to please the other.
+// "Left" is how many cards each of you hasn't marked yet (new cards included).
 async function cardsPayload(db, role) {
-  const review = await reviewState(db);
-  const both = !!(review.queen && review.slave);
   const theirs = role === 'queen' ? 'slave' : 'queen';
-  const cards = (await allCards(db)).map((c) => (both ? c : { ...c, votes: { ...c.votes, [theirs]: null }, theirsHidden: true }));
-  return { decks: DECKS, cards, settings: await getSettings(db), review };
+  const all = await allCards(db);
+  const left = (r) => all.filter((c) => c.votes[r] == null).length;
+  const cards = all.map((c) => (c.votes[role] == null && c.votes[theirs] != null
+    ? { ...c, votes: { ...c.votes, [theirs]: null }, theirsHidden: true }
+    : c));
+  return { decks: DECKS, cards, settings: await getSettings(db), review: { queenLeft: left('queen'), slaveLeft: left('slave') } };
 }
 
 async function allCards(db) {
@@ -550,8 +547,8 @@ async function handleApi(request, env, ctx, role, url) {
   }
 
   // ----- expectation review -----
+  // Kept for older pages: finishing just tells the other one, nothing is unlocked by it.
   if (path === '/review/done' && method === 'POST') {
-    await setSetting(env.DB, 'reviewDone_' + role, now).run();
     push([other(role)]);
     return json(await cardsPayload(env.DB, role));
   }
