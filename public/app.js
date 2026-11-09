@@ -506,7 +506,7 @@ function reviewResults() {
 
 // ---------- ideas from Claude ----------
 
-const VIBE = { soft: 'רך', playful: 'שובב', strict: 'קשוח' };
+const VIBE = { soft: 'רך', playful: 'שובב', strict: 'קשוח', tease: 'מתגרה', sexual: 'מיני', dirty: 'מלוכלך' };
 
 function ideasSheet(close) {
   const I = S.ideas;
