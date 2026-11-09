@@ -20,8 +20,8 @@ const SEV = { request: 'בקשה', command: 'פקודה', royal: 'צו מלכו�
 const DECK_LABEL = { punish: 'עונש', service: 'שירות', worship: 'פולחן', humil: 'השפלה', bind: 'ריסון וחושים', pain: 'כאב', feet: 'רגליים', rules: 'חוקי היום', reward: 'פרס', water: 'מים' };
 const DECK_ORDER = ['punish', 'service', 'worship', 'feet', 'humil', 'bind', 'pain', 'rules', 'reward', 'water'];
 const dots = (n) => '◆'.repeat(n) + '◇'.repeat(3 - n);
-const STATUS_Q = { open: 'בביצוע', submitted: 'ממתין לחותמך', overdue: 'באיחור', done: 'אושר' };
-const STATUS_S = { open: 'בביצוע', submitted: 'הוגש', overdue: 'באיחור', done: 'אושר' };
+const STATUS_Q = { open: 'ממתין לביצוע', doing: 'העבד מבצע עכשיו', submitted: 'ממתין לחותמך', overdue: 'באיחור', done: 'אושר' };
+const STATUS_S = { open: 'ממתין לביצוע', doing: 'מבצע', submitted: 'הוגש', overdue: 'באיחור', done: 'אושר' };
 
 const pad2 = (n) => String(n).padStart(2, '0');
 function hhmm(d) { return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
@@ -244,7 +244,10 @@ function card(d, q, now) {
     ? 'אושר ' + fmtWhen(d.doneAt) + (d.pointsAwarded != null ? ` · ${d.pointsAwarded}+` : '')
     : d.status === 'submitted' ? 'הוגש ' + fmtWhen(d.submittedAt)
     : d.deadline != null ? `עד ${fmtWhen(d.deadline)} · ${rel(d.deadline, now)}` : 'ללא מועד';
-  const statusTxt = (q ? STATUS_Q : STATUS_S)[d.status];
+  const doing = d.status === 'open' && d.startedAt;
+  const statusTxt = (q ? STATUS_Q : STATUS_S)[doing ? 'doing' : d.status]
+    + (doing && q ? ` · מ־${hhmm(new Date(d.startedAt))}` : '')
+    + (d.status === 'overdue' && d.startedAt ? ' · התחיל' : '');
   const reward = d.kind === 'reward';
   let actions = '';
   if (q) {
@@ -258,7 +261,9 @@ function card(d, q, now) {
     if (d.status !== 'done') actions += `<button class="link" data-act="del" data-id="${d.id}">בטלי את הצו</button>`;
   } else {
     if (reward && (d.status === 'open' || late)) actions = `<button class="btn gold" data-act="submit" data-id="${d.id}">לבקש לממש</button>`;
-    else if (d.status === 'open' || late) actions = `<button class="btn" data-act="submit" data-id="${d.id}" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.check}ביצעתי — הגש לאישורה</button>`;
+    else if ((d.status === 'open' || late) && !d.startedAt) actions = `<button class="btn gold" data-act="start" data-id="${d.id}">▶ מבצע</button>`;
+    else if (d.status === 'open' || late) actions = `<span class="st submitted">מבצע מ־${hhmm(new Date(d.startedAt))}</span>
+      <button class="btn" data-act="submit" data-id="${d.id}" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.check}סיימתי — הגש לאישורה</button>`;
     else if (d.status === 'submitted') actions = `<span class="st submitted">${reward ? 'ממתין לאישור המלכה…' : 'ממתין לחותם המלכה…'}</span>`;
     else actions = `<span class="st">${reward ? 'מומש' : 'המלכה מרוצה'}</span>`;
   }
@@ -267,7 +272,7 @@ function card(d, q, now) {
   const report = d.status === 'submitted' && d.report ? `<p class="quote">דיווח העבד: ${esc(d.report)}</p>` : '';
   const rejected = d.status !== 'done' && d.status !== 'submitted' && d.rejectReason ? `<p class="quote red">${q ? 'דחית' : 'המלכה דחתה'}: ${esc(d.rejectReason)}</p>` : '';
   return `<article class="card ${d.status}">
-    <div class="meta">${label}<span class="st ${d.status}">${statusTxt}</span></div>
+    <div class="meta">${label}<span class="st ${doing ? 'doing' : d.status}">${statusTxt}</span></div>
     <h3>${esc(d.title)}</h3>
     <span class="when${late ? ' late' : ''}">${when}</span>
     ${note}${report}${rejected}${actions}
@@ -1423,6 +1428,7 @@ app.addEventListener('click', async (e) => {
       const r = await api('/decrees', { method: 'POST', body: { title, note: S.draft.note, severity: S.draft.severity, deadline: Number.isFinite(dl) ? dl : null } });
       return act(r, 'הצו נחתם');
     }
+    case 'start': { el.disabled = true; const r = await api(`/decrees/${id}/start`, { method: 'POST' }); return act(r, 'בהצלחה. המלכה רואה שהתחלת.'); }
     case 'submit': S.sheet = { type: 'submit', id }; return render();
     case 'doSubmit': { el.disabled = true; const r = await api(`/decrees/${id}/submit`, { method: 'POST', body: { report: document.getElementById('f-rep')?.value || '' } }); return act(r, 'הוגש לאישור המלכה'); }
     case 'approve': S.sheet = { type: 'approve', id, bonus: 0 }; return render();

@@ -512,3 +512,23 @@ test('ideas: "at work" topic stays discreet', async () => {
   assert.match(prompt, /invisible to coworkers/);
   assert.match(prompt, /locked restroom/);
 });
+
+test('decree steps: waiting → doing → submitted; reject resets to waiting', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  await env.DB.prepare(`UPDATE settings SET value = '0' WHERE key = 'paused'`).run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  let r = await call('/api/decrees', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'לקפל כביסה', deadline: Date.now() + 3600e3 } });
+  const id = r.data.decrees.find((d) => d.title === 'לקפל כביסה').id;
+  const get = (res) => res.data.decrees.find((d) => d.id === id);
+  assert.equal(get(r).startedAt, null);
+  assert.equal((await call(`/api/decrees/${id}/start`, { token: QUEEN, lulu: q, method: 'POST' })).status, 403);
+  r = await call(`/api/decrees/${id}/start`, { token: SLAVE, lulu: s, method: 'POST' });
+  assert.ok(get(r).startedAt);
+  assert.equal(get(r).status, 'open');
+  r = await call(`/api/decrees/${id}/submit`, { token: SLAVE, lulu: s, method: 'POST' });
+  assert.equal(get(r).status, 'submitted');
+  r = await call(`/api/decrees/${id}/reject`, { token: QUEEN, lulu: q, method: 'POST', body: { reason: 'לא מקופל טוב' } });
+  assert.equal(get(r).status, 'open');
+  assert.equal(get(r).startedAt, null);
+});
