@@ -510,23 +510,25 @@ const VIBE = { soft: 'רך', playful: 'שובב', strict: 'קשוח' };
 
 function ideasSheet(close) {
   const I = S.ideas;
+  const q = S.me.role === 'queen';
   const chip = (act, key, cur, label) => `<button class="chip${cur === key ? ' on' : ''}" data-act="${act}" data-v="${key}">${label}</button>`;
-  const decks = [['', 'הכול'], ...DECK_ORDER.filter((k) => k !== 'reward' && k !== 'water').map((k) => [k, DECK_LABEL[k]])];
+  const decks = [['', 'הכול'], ...DECK_ORDER.filter((k) => (q ? k !== 'reward' && k !== 'water' : ['service', 'worship', 'feet'].includes(k))).map((k) => [k, DECK_LABEL[k]])];
   let results = '';
   if (I.loading) results = '<p class="empty">חושבת על רעיונות…</p>';
   else if (I.error) results = `<div class="banner"><span>${esc(I.error)}</span></div>`;
   else if (I.list) results = I.list.length ? I.list.map((x, i) => `<div class="card ${x.severity === 'royal' ? 'overdue' : ''}">
       <div class="meta"><span class="sev ${x.severity}">${SEV[x.severity]}</span>${x.needsHome ? '<span class="st">רק כשהבית פנוי</span>' : ''}</div>
       <h3>${esc(x.title)}</h3><p class="when" style="margin:0">${esc(x.text)}</p>
-      <div class="row2"><button class="btn gold" data-act="ideaUse" data-i="${i}">גזרי</button><button class="btn quiet" data-act="ideaCard" data-i="${i}">לקלפים</button></div>
+      ${q ? `<div class="row2"><button class="btn gold" data-act="ideaUse" data-i="${i}">גזרי</button><button class="btn quiet" data-act="ideaCard" data-i="${i}">לקלפים</button></div>`
+          : `<button class="btn gold" data-act="ideaOffer" data-i="${i}">להציע למלכה</button>`}
     </div>`).join('') : '<p class="empty">לא יצא כלום. נסי שוב.</p>';
   return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="רעיונות">
-    <div class="hd"><h2>✨ רעיונות</h2>${close}</div>
+    <div class="hd"><h2>${q ? '✨ רעיונות' : '✨ רעיונות לשירות'}</h2>${close}</div>
     <div class="field"><span class="lbl">אווירה</span><div class="chips">${Object.entries(VIBE).map(([k, l]) => chip('ideaVibe', k, I.vibe, l)).join('')}</div></div>
     <div class="field"><span class="lbl">נושא</span><div class="chiprow">${decks.map(([k, l]) => chip('ideaDeck', k, I.deck, l)).join('')}</div></div>
     <div class="field"><span class="lbl">עוצמה</span><div class="chips">${[1, 2, 3].map((n) => chip('ideaLvl', String(n), String(I.lvl), '◆'.repeat(n))).join('')}</div></div>
-    <div class="field"><label for="i-wish">מה בא לך? (לא חובה)</label><input id="i-wish" maxlength="300" value="${esc(I.wish)}" placeholder="למשל: משהו עם הרגליים, לפני השינה"></div>
-    <button class="btn blood" data-act="ideaGo" ${I.loading ? 'disabled' : ''}>${I.list ? 'עוד רעיונות' : 'תני לי רעיונות'}</button>
+    <div class="field"><label for="i-wish">${q ? 'מה בא לך? (לא חובה)' : 'כיוון משלך? (לא חובה)'}</label><input id="i-wish" maxlength="300" value="${esc(I.wish)}" placeholder="${q ? 'למשל: משהו עם הרגליים, לפני השינה' : 'למשל: לפנק אותה אחרי יום ארוך'}"></div>
+    <button class="btn blood" data-act="ideaGo" ${I.loading ? 'disabled' : ''}>${I.list ? 'עוד רעיונות' : q ? 'תני לי רעיונות' : 'תן לי רעיונות'}</button>
     <p class="when" style="text-align:center">רק בתוך מה ששניכם סימנתם ✓. מה שאחד סימן ✗ — לא יוצע.</p>
     ${results}
   </section></div>`;
@@ -540,8 +542,8 @@ async function askIdeas() {
   S.ideas.loading = false;
   if (r.ideas) S.ideas.list = r.ideas;
   else S.ideas.error = r.error === 'not configured' ? 'הרעיונות עוד לא מחוברים. צריך להוסיף מפתח ב־Cloudflare.'
-    : r.error === 'daily limit' ? 'הגעת למכסה היומית. מחר יש עוד.'
-    : 'לא הצלחתי להביא רעיונות. נסי שוב.';
+    : r.error === 'daily limit' ? 'הגעתם למכסה היומית. מחר יש עוד.'
+    : 'לא הצלחתי להביא רעיונות. נסו שוב.';
   if (S.sheet?.type === 'ideas') render();
 }
 
@@ -564,7 +566,7 @@ const TOUR = {
     ['הצווים', ['למעלה — הצו הבא וכמה זמן נשאר. "ביצעתי — הגש לאישורה" שולח לה, עם דיווח אם תרצה.', 'אם היא דוחה, הצו חוזר אליך עם הסיבה. איחור — אדום, ואולי עונש.']],
     ['קלפים ופרסים', ['קלפים שהמלכה שולפת מגיעים אליך כצווים, עם החפיסה שלהם.', 'פרס מגיע בזהב — "לבקש לממש" כשתרצה להשתמש בו.']],
     ['נקודות', ['בקשה 5, פקודה 10, צו מלכותי 20 — וחצי באיחור. הפרות מורידות.', 'במסך "נקודות" אפשר לבקש להמיר. המלכה רשאית לסרב.']],
-    ['מצב המלכה והצעת שירות', ['למעלה תראה את מצב המלכה, ומתי הפרוטוקול פעיל — אז פונים רק "המלכה".', '"הצעת שירות" — אתה מציע משהו ביוזמתך, והיא מחליטה אם זה הופך לצו.']],
+    ['מצב המלכה והצעת שירות', ['למעלה תראה את מצב המלכה, ומתי הפרוטוקול פעיל — אז פונים רק "המלכה".', '"הצעת שירות" — אתה מציע משהו ביוזמתך, והיא מחליטה אם זה הופך לצו. אין רעיון? ✨ רעיונות לשירות.']],
     ['גבולות וצ\'ק־אין', ['במסך "חוקים" אתה יכול לפסול כל קלף, בלי להסביר. קלפים מסומנים "ירוק" נעולים עד ששניכם מאשרים.', 'אחרי כל קלף ◆◆◆ — צ\'ק־אין קצר ופרטי. התשובות נחשפות רק כששניכם עניתם.']],
     ['ביטחון', ['⏸ למעלה — הפוגה: עוצר הכול, בכל רגע, בלי עונש. 🔒 — נעילה מיידית.', 'ההתראות תמיד ניטרליות. מפעילים אותן במסך "חוקים".']],
     ['ועכשיו: תיאום ציפיות', ['לפני שמתחילים, כל אחד מכם עובר על כל הקלפים ומסמן ✓ או ✗ — בכנות.', 'המלכה לא רואה את הסימונים שלך עד ששניכם מסיימים. אז תראו יחד על מה הסכמתם ועל מה כדאי לדבר. הכפתור מחכה במסך הצווים.']]
@@ -642,7 +644,10 @@ function slaveDecrees() {
     ${reviewBanner()}
     ${slaveStatus()}
     ${hero}${banners}${checkinPrompts()}${redeemRequests(false)}
-    <button class="btn" data-act="offer" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.crown}הצעת שירות למלכה</button>
+    <div class="row2" style="grid-template-columns:2fr 1fr">
+      <button class="btn" data-act="offer" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.crown}הצעת שירות למלכה</button>
+      <button class="btn quiet" data-act="ideas">✨ רעיונות</button>
+    </div>
     ${offerRequests(false)}
     <div class="sec"><h2>מה עליך לבצע</h2><span>אין לך הרשאה לערוך צווים</span></div>
     ${open.length ? open.map((d) => card(d, false, now)).join('') : '<p class="empty">אין צווים פתוחים. כרגע.</p>'}
@@ -894,6 +899,7 @@ function sheetView() {
       <div class="field"><label for="o-title">השירות</label><input id="o-title" maxlength="200" placeholder="למשל: אמבט רגליים הערב"></div>
       <div class="field"><label for="o-note">פרטים (לא חובה)</label><textarea id="o-note" maxlength="1000" placeholder="מתי, איך…"></textarea></div>
       <button class="btn blood" data-act="doOffer">הגש למלכה</button>
+      <button class="link" data-act="ideas" style="text-align:center">אין רעיון? ✨ רעיונות לשירות</button>
     </section></div>`;
   }
   if (s.type === 'offerYes') {
@@ -1182,6 +1188,14 @@ app.addEventListener('click', async (e) => {
       return render();
     }
     case 'ideaGo': return askIdeas();
+    case 'ideaOffer': {
+      const x = S.ideas.list[Number(el.dataset.i)];
+      S.sheet = { type: 'offer' }; render();
+      const t = document.getElementById('o-title'), n = document.getElementById('o-note');
+      if (t) t.value = x.title;
+      if (n) n.value = x.text;
+      return;
+    }
     case 'checkIdeas': {
       S.keyCheck = '…'; render();
       const r = await api('/ideas/check', { method: 'POST' });

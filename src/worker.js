@@ -562,7 +562,7 @@ async function handleApi(request, env, ctx, role, url) {
 
   // ----- task ideas from Claude (queen only) -----
   if (path === '/ideas' && method === 'POST') {
-    if (role !== 'queen') return err(403, 'forbidden');
+    // The queen gets task ideas; the slave gets ideas for services to offer her.
     if (!env.ANTHROPIC_API_KEY) return err(503, 'not configured');
     // At most 40 requests a day, as a cost guard.
     const p = _tz(now);
@@ -585,7 +585,8 @@ async function handleApi(request, env, ctx, role, url) {
     const out = await generateIdeas(env, {
       vibe: VIBES[b.vibe] ? b.vibe : 'playful', deckLabel: deck ? DECKS[deck].label : null, lvl,
       wish: cleanText(b.wish, 300), approved, refused, recent,
-      homeFree: settings.homeFree, protocolLevel: settings.protocol ? settings.protocolLevel : null
+      homeFree: settings.homeFree, protocolLevel: settings.protocol ? settings.protocolLevel : null,
+      mode: role === 'slave' ? 'offer' : 'task'
     });
     if (out.error) return err(502, out.error);
     return json({ ideas: out.ideas, left: 39 - used });

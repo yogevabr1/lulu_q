@@ -404,7 +404,10 @@ test('ideas from Claude: queen only, needs a key, limits go into the prompt', as
   assert.equal((await call('/api/ideas', { token: QUEEN, lulu: q, method: 'POST', body: {} })).data.error, 'not configured');
 
   const withKey = { ...env, ANTHROPIC_API_KEY: 'test-key' };
-  assert.equal((await call('/api/ideas', { token: SLAVE, lulu: s, method: 'POST', body: {}, envOverride: withKey })).status, 403);
+  // The slave gets ideas too — for services to offer her.
+  const so = await call('/api/ideas', { token: SLAVE, lulu: s, method: 'POST', body: { deck: 'service' }, envOverride: withKey });
+  assert.equal(so.status, 200);
+  assert.match(claudeCalls.at(-1).body.system, /OFFER/);
   await call('/api/cards/pu03/vote', { token: SLAVE, lulu: s, method: 'POST', body: { ok: false } });
   const r = await call('/api/ideas', { token: QUEEN, lulu: q, method: 'POST', body: { vibe: 'soft', deck: 'service', lvl: 1, wish: 'משהו נעים' }, envOverride: withKey });
   assert.equal(r.status, 200);
