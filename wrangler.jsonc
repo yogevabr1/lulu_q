@@ -26,8 +26,8 @@
     "SLAVE_EMAIL": "yogevabr@gmail.com",
     // Filled in after Cloudflare Access is turned on. While empty, the app
     // refuses every request (fails closed).
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
+    "ACCESS_TEAM_DOMAIN": "shy-night-a109.cloudflareaccess.com",
+    "ACCESS_AUD": "f10e8f176af2a78a63aadc6d263aa3b2d54e9559df52b14b1fd01c29ec27e841"
   },
   "observability": { "enabled": true }
 }
