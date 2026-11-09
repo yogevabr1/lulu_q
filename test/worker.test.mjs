@@ -487,6 +487,17 @@ test('status: slave reports, queen demands with a timer, late costs 5 and notifi
   r = await call('/api/decrees', { token: SLAVE, lulu: s });
   before = r.data.points.total;
   r = await call('/api/status', { token: SLAVE, lulu: s, method: 'POST', body: { text: 'סליחה, המלכה' } });
+  assert.equal(r.data.points.total, before);              // no automatic penalty
+  assert.ok(r.data.settings.status.lateBy > 0);
+  assert.equal((await call('/api/status/late', { token: SLAVE, lulu: s, method: 'POST', body: { penalize: true } })).status, 403);
+  r = await call('/api/status/late', { token: QUEEN, lulu: q, method: 'POST', body: { penalize: false } });
+  assert.equal(r.data.points.total, before);
+  assert.equal(r.data.settings.status.lateBy, null);
+  // Late again, and this time she takes the points.
+  await call('/api/status/demand', { token: QUEEN, lulu: q, method: 'POST', body: { minutes: 5 } });
+  await env.DB.prepare(`UPDATE settings SET value = ? WHERE key = 'statusReqDue'`).bind(String(Date.now() - 1000)).run();
+  await call('/api/status', { token: SLAVE, lulu: s, method: 'POST', body: { text: 'שוב באיחור' } });
+  r = await call('/api/status/late', { token: QUEEN, lulu: q, method: 'POST', body: { penalize: true } });
   assert.equal(r.data.points.total, before - 5);
   assert.equal(r.data.points.recent[0].reason, 'עדכון סטטוס באיחור');
 });

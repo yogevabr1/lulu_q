@@ -156,7 +156,7 @@ async function ensureSchema(db) {
 async function getSettings(db) {
   const rows = (await db.prepare(
     `SELECT key, value FROM settings WHERE key IN ('homeFree', 'paused', 'pausedBy', 'mood', 'protocol', 'protocolLevel', 'protocolSince', 'summary',
-      'statusText', 'statusAt', 'statusReqAt', 'statusReqDue', 'statusReqLate')`
+      'statusText', 'statusAt', 'statusReqAt', 'statusReqDue', 'statusReqLate', 'statusLateBy')`
   ).all()).results;
   const m = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   let summary = null;
@@ -168,7 +168,8 @@ async function getSettings(db) {
     summary,
     status: {
       text: m.statusText || '', at: Number(m.statusAt) || null,
-      demandAt: Number(m.statusReqAt) || null, demandDue: Number(m.statusReqDue) || null, lateNotified: m.statusReqLate === '1'
+      demandAt: Number(m.statusReqAt) || null, demandDue: Number(m.statusReqDue) || null, lateNotified: m.statusReqLate === '1',
+      lateBy: Number(m.statusLateBy) || null
     }
   };
 }
@@ -520,9 +521,8 @@ async function handleApi(request, env, ctx, role, url) {
     const stmts = [setSetting(env.DB, 'statusText', text), setSetting(env.DB, 'statusAt', now)];
     if (st.demandAt) {
       stmts.push(setSetting(env.DB, 'statusReqAt', ''), setSetting(env.DB, 'statusReqDue', ''), setSetting(env.DB, 'statusReqLate', '0'));
-      if (st.demandDue && now > st.demandDue) {
-        stmts.push(env.DB.prepare('INSERT INTO points (delta, reason, created) VALUES (?, ?, ?)').bind(-5, 'עדכון סטטוס באיחור', now));
-      }
+      // A late update is not punished automatically: the queen decides.
+      if (st.demandDue && now > st.demandDue) stmts.push(setSetting(env.DB, 'statusLateBy', now - st.demandDue));
     }
     await env.DB.batch(stmts);
     push(['queen']);
@@ -536,6 +536,15 @@ async function handleApi(request, env, ctx, role, url) {
       setSetting(env.DB, 'statusReqAt', now), setSetting(env.DB, 'statusReqDue', now + minutes * 60000), setSetting(env.DB, 'statusReqLate', '0')
     ]);
     push(['slave']);
+    return json(await listAll(env, role));
+  }
+  if (path === '/status/late' && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    const b = await readBody(request);
+    const stmts = [setSetting(env.DB, 'statusLateBy', '')];
+    if (b.penalize === true) stmts.push(env.DB.prepare('INSERT INTO points (delta, reason, created) VALUES (?, ?, ?)').bind(-5, 'עדכון סטטוס באיחור', now));
+    await env.DB.batch(stmts);
+    if (b.penalize === true) push(['slave']);
     return json(await listAll(env, role));
   }
   if (path === '/status/cancel' && method === 'POST') {

@@ -341,6 +341,10 @@ function statusCard(q) {
     return `<section class="panel">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span class="lbl">העבד עכשיו</span><span class="when">${st.at ? 'עודכן ' + ago(st.at) : ''}</span></div>
       <div class="statusline">${st.text ? esc(st.text) : '<span class="when">עוד לא עדכן</span>'}</div>
+      ${st.lateBy ? `<div class="banner gold" style="flex-direction:column;align-items:stretch">
+          <span>העבד עדכן באיחור של ${Math.max(1, Math.round(st.lateBy / 60000))} דק׳. להוריד נקודות?</span>
+          <div class="row2"><button class="btn red" data-act="statusLate" data-p="1">להוריד 5</button><button class="btn quiet" data-act="statusLate" data-p="0">סלחתי</button></div>
+        </div>` : ''}
       ${demanding
         ? `<div class="banner" style="justify-content:space-between;align-items:center"><span>דרשת עדכון · ${timer}</span><button class="btn quiet" data-act="statusCancel" style="min-height:40px;flex:none">ביטול</button></div>`
         : `<div class="chips" style="grid-template-columns:1.6fr repeat(3,minmax(0,1fr))"><span class="lbl" style="align-self:center">דרשי עדכון:</span>${[5, 10, 15].map((m) => `<button class="chip" data-act="statusDemand" data-m="${m}">${m} דק׳</button>`).join('')}</div>`}
@@ -1309,9 +1313,10 @@ app.addEventListener('click', async (e) => {
       if (!text) return document.getElementById('st-text')?.focus();
       const late = S.data.settings.status?.demandDue && Date.now() > S.data.settings.status.demandDue;
       const r = await api('/status', { method: 'POST', body: { text } });
-      return act(r, late ? 'עודכן — באיחור, 5 נקודות ירדו' : 'עודכן. המלכה קיבלה התראה.');
+      return act(r, late ? 'עודכן באיחור. המלכה תחליט אם להוריד נקודות.' : 'עודכן. המלכה קיבלה התראה.');
     }
     case 'statusDemand': { const r = await api('/status/demand', { method: 'POST', body: { minutes: Number(el.dataset.m) } }); return act(r, 'העבד קיבל התראה'); }
+    case 'statusLate': { const pen = el.dataset.p === '1'; const r = await api('/status/late', { method: 'POST', body: { penalize: pen } }); return act(r, pen ? '5 נקודות ירדו' : 'נסלח'); }
     case 'statusCancel': { const r = await api('/status/cancel', { method: 'POST' }); return act(r); }
     case 'waitStart': {
       const v = document.getElementById('w-start')?.value;
