@@ -864,7 +864,10 @@ export default {
     }
 
     const res = await env.ASSETS.fetch(request);
-    return withHeaders(res);
+    // Always check for a newer version, so updates show up right after a deploy.
+    const type = res.headers.get('Content-Type') || '';
+    const fresh = /html|javascript|css|manifest/.test(type) ? { 'Cache-Control': 'no-cache' } : {};
+    return withHeaders(res, fresh);
   },
 
   async scheduled(event, env, ctx) {
