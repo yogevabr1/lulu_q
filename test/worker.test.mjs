@@ -262,3 +262,38 @@ test('scheduled reminders fire once per decree', async () => {
   await runSchedule(env);
   assert.equal(pushes.length, firstRound);
 });
+
+test('rituals and point redemptions', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+
+  // Rituals: queen only; the scheduler creates today's decree once.
+  assert.equal((await call('/api/rituals', { token: SLAVE, lulu: s, method: 'POST', body: { title: 'x', freq: 'daily', time: '23:59' } })).status, 403);
+  assert.equal((await call('/api/rituals', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'x', freq: 'daily', time: '7:30' } })).status, 400);
+  const p = (await import('../src/logic.js')).tzParts(Date.now());
+  const later = `${String(Math.min(p.h + 1, 23)).padStart(2, '0')}:59`;
+  let r = await call('/api/rituals', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'קפה למיטה', freq: 'daily', time: later, severity: 'command' } });
+  await flush();
+  const { runSchedule } = await import('../src/worker.js');
+  await runSchedule(env); await runSchedule(env);
+  r = await call('/api/decrees', { token: SLAVE, lulu: s });
+  assert.equal(r.data.rituals.length, 1);
+  assert.equal(r.data.decrees.filter((d) => d.title === 'קפה למיטה').length, 1);
+  r = await call(`/api/rituals/${r.data.rituals[0].id}/toggle`, { token: QUEEN, lulu: q, method: 'POST' });
+  assert.equal(r.data.rituals[0].active, 0);
+
+  // Redemptions: needs enough free points, queen decides, approval deducts.
+  await call('/api/points', { token: QUEEN, lulu: q, method: 'POST', body: { delta: 100, reason: 'בדיקה' } });
+  r = await call('/api/decrees', { token: SLAVE, lulu: s });
+  const start = r.data.points.total;
+  assert.equal((await call('/api/redeem', { token: QUEEN, lulu: q, method: 'POST', body: { item: 'sofa' } })).status, 403);
+  r = await call('/api/redeem', { token: SLAVE, lulu: s, method: 'POST', body: { item: 'sofa' } });
+  const id = r.data.redeems[0].id;
+  assert.equal(r.data.points.total, start); // nothing taken until approved
+  if (start - 30 < 150) assert.equal((await call('/api/redeem', { token: SLAVE, lulu: s, method: 'POST', body: { item: 'pamper' } })).data.error, 'not enough points');
+  assert.equal((await call(`/api/redeem/${id}/approve`, { token: SLAVE, lulu: s, method: 'POST' })).status, 403);
+  r = await call(`/api/redeem/${id}/approve`, { token: QUEEN, lulu: q, method: 'POST' });
+  assert.equal(r.data.points.total, start - 30);
+  assert.equal((await call(`/api/redeem/${id}/deny`, { token: QUEEN, lulu: q, method: 'POST' })).status, 409);
+});

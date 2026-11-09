@@ -48,3 +48,27 @@ test('lockout after five wrong pins', () => {
   assert.equal(lockoutAfterFail(5, 0), 5 * 60 * 1000);
   assert.equal(lockoutAfterFail(6, 0), 10 * 60 * 1000);
 });
+
+import { localToUtc, tzParts, ritualDue, validTime } from '../src/logic.js';
+
+test('Israel time conversion, winter and summer', () => {
+  // 9 Nov 2026 is winter time (UTC+2); 1 Jul 2026 is summer time (UTC+3).
+  assert.equal(new Date(localToUtc(2026, 11, 9, 20, 0)).toISOString(), '2026-11-09T18:00:00.000Z');
+  assert.equal(new Date(localToUtc(2026, 7, 1, 20, 0)).toISOString(), '2026-07-01T17:00:00.000Z');
+  const p = tzParts(Date.parse('2026-11-09T22:30:00Z')); // 00:30 on Tuesday local
+  assert.deepEqual([p.d, p.h, p.mi, p.wd], [10, 0, 30, 2]);
+});
+
+test('rituals are created once a day, before their time, on the right weekday', () => {
+  const morning = Date.parse('2026-11-10T04:00:00Z'); // Tue 06:00 local
+  const daily = { active: 1, freq: 'daily', time: '07:30', last_key: null };
+  const due = ritualDue(daily, morning);
+  assert.equal(due.key, '2026-11-10');
+  assert.equal(new Date(due.deadline).toISOString(), '2026-11-10T05:30:00.000Z');
+  assert.equal(ritualDue({ ...daily, last_key: '2026-11-10' }, morning), null);
+  assert.equal(ritualDue({ ...daily, time: '05:00' }, morning), null); // already passed
+  assert.equal(ritualDue({ ...daily, active: 0 }, morning), null);
+  assert.ok(ritualDue({ active: 1, freq: 'weekly', weekday: 2, time: '21:00' }, morning));
+  assert.equal(ritualDue({ active: 1, freq: 'weekly', weekday: 3, time: '21:00' }, morning), null);
+  assert.ok(validTime('07:30') && !validTime('7:30') && !validTime('24:00'));
+});

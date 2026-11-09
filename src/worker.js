@@ -1,7 +1,8 @@
 import {
   SEVERITIES, approvalPoints, displayStatus, validPin, cleanText,
   lockoutAfterFail, roleForEmail, tokenAlive,
-  cardEnabled, cardNeedsHome, lvlToSeverity
+  cardEnabled, cardNeedsHome, lvlToSeverity,
+  ritualDue, validTime, RITUAL_FREQ, REDEEM_ITEMS
 } from './logic.js';
 import { DECKS, CARDS } from './cards.js';
 import { notify, vapidKeys } from './push.js';
@@ -122,7 +123,14 @@ async function ensureSchema(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT, deck TEXT NOT NULL, lvl INTEGER NOT NULL,
       title TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS push_subs (
-      endpoint TEXT PRIMARY KEY, role TEXT NOT NULL, created INTEGER NOT NULL)`)
+      endpoint TEXT PRIMARY KEY, role TEXT NOT NULL, created INTEGER NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS rituals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+      severity TEXT NOT NULL, freq TEXT NOT NULL, weekday INTEGER, time TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1, last_key TEXT, created INTEGER NOT NULL)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS redeems (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, item TEXT NOT NULL, cost INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending', created INTEGER NOT NULL, decided INTEGER)`)
   ]);
   // Columns added after v1.
   const cols = (await db.prepare(`PRAGMA table_info(decrees)`).all()).results.map((c) => c.name);
@@ -214,11 +222,18 @@ async function listAll(env) {
   ).bind(since).all();
   const total = await env.DB.prepare('SELECT COALESCE(SUM(delta), 0) AS t FROM points').first();
   const recent = await env.DB.prepare('SELECT delta, reason, created FROM points ORDER BY id DESC LIMIT 20').all();
+  const rituals = await env.DB.prepare('SELECT id, title, note, severity, freq, weekday, time, active FROM rituals ORDER BY time, id').all();
+  const redeems = await env.DB.prepare(
+    `SELECT id, item, cost, status, created, decided FROM redeems WHERE status = 'pending' OR decided > ? ORDER BY id DESC LIMIT 20`
+  ).bind(since).all();
   return {
     now,
     decrees: rows.results.map((d) => decreeOut(d, now)),
     points: { total: total.t, recent: recent.results },
-    settings: await getSettings(env.DB)
+    settings: await getSettings(env.DB),
+    rituals: rituals.results,
+    redeems: redeems.results.map((r) => ({ ...r, label: REDEEM_ITEMS[r.item]?.label || r.item })),
+    redeemItems: REDEEM_ITEMS
   };
 }
 
@@ -345,6 +360,59 @@ async function handleApi(request, env, ctx, role, url) {
     const reason = cleanText(b.reason, 200) || (delta >= 0 ? 'בונוס מהמלכה' : 'הפרה');
     if (!Number.isFinite(delta) || delta === 0 || Math.abs(delta) > 500) return err(400, 'bad delta');
     await env.DB.prepare('INSERT INTO points (delta, reason, created) VALUES (?, ?, ?)').bind(delta, reason, now).run();
+    return json(await listAll(env));
+  }
+
+  // ----- recurring rituals (queen) -----
+  if (path === '/rituals' && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    const b = await readBody(request);
+    const title = cleanText(b.title, 200);
+    const freq = RITUAL_FREQ.includes(b.freq) ? b.freq : null;
+    const weekday = freq === 'weekly' ? Number(b.weekday) : null;
+    if (!title || !freq || !validTime(b.time)) return err(400, 'bad ritual');
+    if (freq === 'weekly' && !(Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)) return err(400, 'bad weekday');
+    const severity = SEVERITIES.includes(b.severity) ? b.severity : 'command';
+    await env.DB.prepare('INSERT INTO rituals (title, note, severity, freq, weekday, time, created) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(title, cleanText(b.note, 1000), severity, freq, weekday, b.time, now).run();
+    ctx.waitUntil(runSchedule(env));
+    return json(await listAll(env));
+  }
+  const rm = path.match(/^\/rituals\/(\d+)(?:\/(toggle))?$/);
+  if (rm) {
+    if (role !== 'queen') return err(403, 'forbidden');
+    const id = Number(rm[1]);
+    if (!rm[2] && method === 'DELETE') await env.DB.prepare('DELETE FROM rituals WHERE id = ?').bind(id).run();
+    else if (rm[2] && method === 'POST') await env.DB.prepare('UPDATE rituals SET active = 1 - active WHERE id = ?').bind(id).run();
+    else return err(405, 'method');
+    return json(await listAll(env));
+  }
+
+  // ----- point redemptions: the slave asks, the queen decides -----
+  if (path === '/redeem' && method === 'POST') {
+    if (role !== 'slave') return err(403, 'forbidden');
+    const b = await readBody(request);
+    const item = REDEEM_ITEMS[b.item];
+    if (!item) return err(400, 'bad item');
+    const total = (await env.DB.prepare('SELECT COALESCE(SUM(delta), 0) AS t FROM points').first()).t;
+    const pending = (await env.DB.prepare(`SELECT COALESCE(SUM(cost), 0) AS t FROM redeems WHERE status = 'pending'`).first()).t;
+    if (total - pending < item.cost) return err(409, 'not enough points');
+    await env.DB.prepare('INSERT INTO redeems (item, cost, created) VALUES (?, ?, ?)').bind(b.item, item.cost, now).run();
+    push(['queen']);
+    return json(await listAll(env));
+  }
+  const xm = path.match(/^\/redeem\/(\d+)\/(approve|deny)$/);
+  if (xm && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    const rq = await env.DB.prepare('SELECT * FROM redeems WHERE id = ?').bind(Number(xm[1])).first();
+    if (!rq) return err(404, 'not found');
+    if (rq.status !== 'pending') return err(409, 'already decided');
+    const stmts = [env.DB.prepare('UPDATE redeems SET status = ?, decided = ? WHERE id = ?')
+      .bind(xm[2] === 'approve' ? 'approved' : 'denied', now, rq.id)];
+    if (xm[2] === 'approve') stmts.push(env.DB.prepare('INSERT INTO points (delta, reason, created) VALUES (?, ?, ?)')
+      .bind(-rq.cost, 'הומר: ' + (REDEEM_ITEMS[rq.item]?.label || rq.item), now));
+    await env.DB.batch(stmts);
+    push(['slave']);
     return json(await listAll(env));
   }
 
@@ -484,8 +552,24 @@ export async function runSchedule(env) {
     ...soon.results.map((r) => env.DB.prepare('UPDATE decrees SET notified_soon = ? WHERE id = ?').bind(now, r.id)),
     ...late.results.map((r) => env.DB.prepare('UPDATE decrees SET notified_late = ? WHERE id = ?').bind(now, r.id))
   ];
+  // Recurring rituals: create today's decree once, before its time.
+  const rituals = (await env.DB.prepare('SELECT * FROM rituals WHERE active = 1').all()).results;
+  let created = 0;
+  for (const r of rituals) {
+    const due = ritualDue(r, now);
+    if (!due) continue;
+    // Claim the day first so two overlapping runs can't create it twice.
+    const claim = await env.DB.prepare('UPDATE rituals SET last_key = ? WHERE id = ? AND (last_key IS NULL OR last_key != ?)')
+      .bind(due.key, r.id, due.key).run();
+    if ((claim.meta?.changes ?? claim.changes) !== 1) continue;
+    stmts.push(env.DB.prepare(
+      `INSERT INTO decrees (title, note, severity, deadline, created, kind) VALUES (?, ?, ?, ?, ?, 'decree')`
+    ).bind(r.title, r.note, r.severity, due.deadline, now));
+    created++;
+  }
   if (stmts.length) await env.DB.batch(stmts);
   const subject = env.VAPID_SUBJECT || 'mailto:noreply@example.com';
+  if (created) await notify(env, ['slave'], subject);
   if (soon.results.length) await notify(env, ['slave'], subject);
   if (late.results.length) await notify(env, ['slave', 'queen'], subject);
 }

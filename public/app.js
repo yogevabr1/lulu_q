@@ -278,9 +278,39 @@ function queenDecrees() {
       <div class="stat gold"><b>${c('submitted')}</b><span>לאישורך</span></div>
       <div class="stat red"><b>${c('overdue')}</b><span>באיחור</span></div>
     </div>
+    ${redeemRequests(true)}
     <div class="sec"><h2>מגילת הצווים</h2><span>נקודות העבד: ${points.total}</span></div>
     ${active.length ? active.map((d) => card(d, true, now)).join('') : '<p class="empty">אין צווים פתוחים. העבד מחכה לגזירה.</p>'}
+    ${ritualsList()}
     ${done.length ? `<div class="sec"><h2>בוצעו לאחרונה</h2><span>30 יום</span></div>${done.map((d) => card(d, true, now)).join('')}` : ''}`;
+}
+
+const WEEKDAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+const WD_SHORT = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+const ritualWhen = (r) => (r.freq === 'daily' ? 'כל יום' : 'כל יום ' + WEEKDAYS[r.weekday]) + ' עד ' + r.time;
+
+function ritualsList() {
+  const list = S.data.rituals || [];
+  if (!list.length) return `<div class="sec"><h2>צווים קבועים</h2><span>טקסים שחוזרים לבד</span></div>
+    <p class="empty">אין עדיין. בגזירה חדשה אפשר לבחור "כל יום" או "כל שבוע".</p>`;
+  return `<div class="sec"><h2>צווים קבועים</h2><span>נוצרים לבד בכל יום</span></div>
+    ${list.map((r) => `<div class="card${r.active ? '' : ' done'}" style="gap:6px">
+      <div class="meta"><span class="sev ${r.severity}">${SEV[r.severity]}</span><span class="st">${r.active ? ritualWhen(r) : 'מושהה'}</span></div>
+      <h3 style="text-decoration:none">${esc(r.title)}</h3>
+      <div class="row2">
+        <button class="btn quiet" data-act="ritToggle" data-id="${r.id}">${r.active ? 'השהי' : 'הפעילי שוב'}</button>
+        <button class="btn red" data-act="ritDel" data-id="${r.id}">מחקי</button>
+      </div>
+    </div>`).join('')}`;
+}
+
+function redeemRequests(q) {
+  const pend = (S.data.redeems || []).filter((r) => r.status === 'pending');
+  if (!pend.length) return '';
+  return pend.map((r) => `<div class="banner gold" style="flex-direction:column;align-items:stretch">
+    <span>${q ? 'העבד מבקש להמיר' : 'ביקשת להמיר'} <strong>${r.cost} נקודות</strong>: ${esc(r.label)}</span>
+    ${q ? `<div class="row2"><button class="btn gold" data-act="redeemOk" data-id="${r.id}">אשרי</button><button class="btn quiet" data-act="redeemNo" data-id="${r.id}">סרבי</button></div>` : '<span class="when">ממתין להחלטת המלכה…</span>'}
+  </div>`).join('');
 }
 
 function slaveDecrees() {
@@ -309,11 +339,27 @@ function slaveDecrees() {
       <div class="stat gold"><b>${points.total}</b><span>נקודות צייתנות</span></div>
       <div class="stat${overdue.length ? ' red' : ''}"><b>${open.length}</b><span>לביצוע</span></div>
     </div>
-    ${hero}${banners}
+    ${hero}${banners}${redeemRequests(false)}
     <div class="sec"><h2>מה עליך לבצע</h2><span>אין לך הרשאה לערוך צווים</span></div>
     ${open.length ? open.map((d) => card(d, false, now)).join('') : '<p class="empty">אין צווים פתוחים. כרגע.</p>'}
     ${rest.map((d) => card(d, false, now)).join('')}
     ${done.length ? `<div class="sec"><h2>בוצעו לאחרונה</h2><span>30 יום</span></div>${done.map((d) => card(d, false, now)).join('')}` : ''}`;
+}
+
+function redeemShop() {
+  const items = S.data.redeemItems || {};
+  const pending = (S.data.redeems || []).filter((r) => r.status === 'pending').reduce((a, r) => a + r.cost, 0);
+  const avail = S.data.points.total - pending;
+  return `<div class="sec"><h2>בקשת המרה</h2><span>זמין לך: ${avail}</span></div>
+    ${Object.entries(items).map(([k, it]) => `<button class="cardrow" data-act="redeem" data-item="${k}" ${avail >= it.cost ? '' : 'disabled style="opacity:.45"'}>
+      <span class="t" style="font-size:16px">${esc(it.label)}</span><span class="d">${it.cost} ♦</span></button>`).join('')}`;
+}
+
+function redeemHistory() {
+  const done = (S.data.redeems || []).filter((r) => r.status !== 'pending');
+  if (!done.length) return '';
+  return `<div class="sec"><h2>המרות אחרונות</h2><span>30 יום</span></div><div class="ledger">${done.map((r) => `
+    <div><span>${esc(r.label)}<small>${fmtWhen(r.decided)}</small></span><b class="${r.status === 'approved' ? 'plus' : 'minus'}">${r.status === 'approved' ? 'אושר' : 'סורב'}</b></div>`).join('')}</div>`;
 }
 
 function pointsView(q) {
@@ -335,7 +381,10 @@ function pointsView(q) {
       <span class="cd" style="font-size:52px">${points.total}</span>
       <span class="when">${q ? 'העבד מבקש להמיר — את מחליטה' : 'אפשר לבקש מהמלכה להמיר. היא רשאית לסרב.'}</span>
     </section>
+    ${redeemRequests(q)}
     ${quick}
+    ${q ? '' : redeemShop()}
+    ${redeemHistory()}
     <div class="sec"><h2>יומן הנקודות</h2><span>20 האחרונות</span></div>
     <div class="ledger">${ledger}</div>`;
 }
@@ -545,7 +594,13 @@ function sheetView() {
     return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="גזירה חדשה">
       <div class="hd"><h2>גזירה חדשה</h2>${close}</div>
       <div class="field"><label for="f-title">המשימה</label><input id="f-title" maxlength="200" value="${esc(S.draft.title)}" placeholder="מה ירצה הכתר?"></div>
-      <div class="field"><label for="f-dl">עד מתי</label><input id="f-dl" type="datetime-local" value="${esc(S.draft.deadline)}"></div>
+      <div class="field"><span class="lbl">כמה פעמים</span><div class="chips">${[['once', 'פעם אחת'], ['daily', 'כל יום'], ['weekly', 'כל שבוע']].map(([k, l]) => `<button class="chip${S.draft.freq === k ? ' on' : ''}" data-act="freq" data-f="${k}">${l}</button>`).join('')}</div></div>
+      ${S.draft.freq === 'once'
+        ? `<div class="field"><label for="f-dl">עד מתי</label><input id="f-dl" type="datetime-local" value="${esc(S.draft.deadline)}"></div>`
+        : `${S.draft.freq === 'weekly' ? `<div class="field"><span class="lbl">באיזה יום</span><div class="chips" style="grid-template-columns:repeat(7,minmax(0,1fr))">${WD_SHORT.map((w, i) => `<button class="chip${S.draft.weekday === i ? ' on' : ''}" data-act="wd" data-wd="${i}" aria-label="יום ${WEEKDAYS[i]}">${w}</button>`).join('')}</div></div>` : ''}
+           <div class="field"><label for="f-time">עד איזו שעה</label><input id="f-time" type="time" value="${esc(S.draft.time)}"></div>
+           <div class="field"><span class="lbl">טקסים מוצעים</span><div class="chiprow">${RITUAL_PRESETS.map((x, i) => `<button class="chip" data-act="preset" data-i="${i}">${esc(x.title)}</button>`).join('')}</div></div>
+           <p class="when">הצו ייווצר לבד בכל ${S.draft.freq === 'daily' ? 'יום' : 'שבוע'}, והעבד יקבל התראה.</p>`}
       <div class="field"><span class="lbl">חומרת הצו</span><div class="chips">${chips}</div></div>
       <div class="field"><label for="f-note">הוראות לעבד (לא חובה)</label><textarea id="f-note" maxlength="1000" placeholder="איך בדיוק זה ייעשה…">${esc(S.draft.note)}</textarea></div>
       <button class="btn blood" data-act="create">חתמי וגזרי</button>
@@ -611,7 +666,20 @@ function keepDraft() {
   if (t) S.draft.title = t.value;
   if (dl) S.draft.deadline = dl.value;
   if (n) S.draft.note = n.value;
+  const tm = document.getElementById('f-time');
+  if (tm) S.draft.time = tm.value;
 }
+
+const RITUAL_PRESETS = [
+  { title: 'בוקר טוב, המלכה', note: 'בהודעה או בנשיקה.', freq: 'daily', time: '08:00', severity: 'request' },
+  { title: 'קפה למיטה', note: 'כמו שהיא אוהבת.', freq: 'daily', time: '07:30', severity: 'command' },
+  { title: 'מים ליד המיטה', note: '', freq: 'daily', time: '22:30', severity: 'request' },
+  { title: 'דיווח ערב', note: 'מה בוצע, איפה נכשלת, איזה עונש מגיע לך.', freq: 'daily', time: '22:00', severity: 'command' },
+  { title: 'עיסוי רגליים', note: '20 דקות.', freq: 'weekly', weekday: 2, time: '21:00', severity: 'command' },
+  { title: 'פרחים או הפתעה קטנה', note: 'עד 20 ש"ח.', freq: 'weekly', weekday: 4, time: '20:00', severity: 'command' },
+  { title: 'הבית מסודר לשבת', note: '', freq: 'weekly', weekday: 5, time: '14:00', severity: 'royal' },
+  { title: 'קניות לשבוע', note: 'לפי הרשימה שהמלכה אישרה.', freq: 'weekly', weekday: 0, time: '20:00', severity: 'command' }
+];
 
 async function act(r, okMsg) {
   if (r.error) { toast(r.error === 'network' ? 'אין חיבור. נסו שוב.' : 'הפעולה לא הצליחה.'); return false; }
@@ -707,14 +775,37 @@ app.addEventListener('click', async (e) => {
     case 'backdrop': case 'close': S.sheet = null; return render();
     case 'new':
       if (S.data.settings?.paused) return toast('הפוגה פעילה. אין גזירות עד החזרה.');
-      S.draft = { title: '', deadline: defaultDeadline(), note: '', severity: 'command' }; S.sheet = { type: 'new' }; render(); return document.getElementById('f-title')?.focus();
+      S.draft = { title: '', deadline: defaultDeadline(), note: '', severity: 'command', freq: 'once', time: '20:00', weekday: new Date().getDay() }; S.sheet = { type: 'new' }; render(); return document.getElementById('f-title')?.focus();
     case 'sev': keepDraft(); S.draft.severity = el.dataset.sev; return render();
+    case 'freq': keepDraft(); S.draft.freq = el.dataset.f; return render();
+    case 'wd': keepDraft(); S.draft.weekday = Number(el.dataset.wd); return render();
+    case 'preset': {
+      keepDraft();
+      const x = RITUAL_PRESETS[Number(el.dataset.i)];
+      Object.assign(S.draft, { title: x.title, note: x.note, freq: x.freq, time: x.time, severity: x.severity, weekday: x.weekday ?? S.draft.weekday });
+      return render();
+    }
+    case 'ritToggle': { const r = await api(`/rituals/${id}/toggle`, { method: 'POST' }); return act(r); }
+    case 'ritDel': { if (!confirm('למחוק את הצו הקבוע?')) return; const r = await api(`/rituals/${id}`, { method: 'DELETE' }); return act(r, 'נמחק'); }
+    case 'redeem': {
+      const it = S.data.redeemItems[el.dataset.item];
+      if (!confirm(`לבקש מהמלכה להמיר ${it.cost} נקודות?`)) return;
+      const r = await api('/redeem', { method: 'POST', body: { item: el.dataset.item } });
+      if (r.error === 'not enough points') return toast('אין מספיק נקודות.');
+      return act(r, 'הבקשה נשלחה למלכה');
+    }
+    case 'redeemOk': { const r = await api(`/redeem/${id}/approve`, { method: 'POST' }); return act(r, 'אושר'); }
+    case 'redeemNo': { const r = await api(`/redeem/${id}/deny`, { method: 'POST' }); return act(r, 'סורב'); }
     case 'create': {
       keepDraft();
       const title = S.draft.title.trim();
       if (!title) { document.getElementById('f-title')?.focus(); return; }
-      const dl = S.draft.deadline ? new Date(S.draft.deadline).getTime() : null;
       el.disabled = true;
+      if (S.draft.freq !== 'once') {
+        const r = await api('/rituals', { method: 'POST', body: { title, note: S.draft.note, severity: S.draft.severity, freq: S.draft.freq, weekday: S.draft.weekday, time: S.draft.time } });
+        return act(r, 'הצו הקבוע נחתם');
+      }
+      const dl = S.draft.deadline ? new Date(S.draft.deadline).getTime() : null;
       const r = await api('/decrees', { method: 'POST', body: { title, note: S.draft.note, severity: S.draft.severity, deadline: Number.isFinite(dl) ? dl : null } });
       return act(r, 'הצו נחתם');
     }

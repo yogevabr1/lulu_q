@@ -53,6 +53,61 @@ export function cleanText(s, max) {
   return s.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, max);
 }
 
+// ---------- time in Israel (for recurring rituals) ----------
+
+export const TZ = 'Asia/Jerusalem';
+
+export function tzParts(ms, tz = TZ) {
+  const f = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short'
+  });
+  const p = Object.fromEntries(f.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday);
+  return { y: +p.year, m: +p.month, d: +p.day, h: +p.hour, mi: +p.minute, wd };
+}
+
+function tzOffset(ms, tz) {
+  const p = tzParts(ms, tz);
+  return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi) - Math.floor(ms / 60000) * 60000;
+}
+
+// Local wall-clock time in Israel -> UTC milliseconds (handles summer time).
+export function localToUtc(y, m, d, h, mi, tz = TZ) {
+  const guess = Date.UTC(y, m - 1, d, h, mi);
+  let t = guess - tzOffset(guess, tz);
+  t = guess - tzOffset(t, tz);
+  return t;
+}
+
+export const RITUAL_FREQ = ['daily', 'weekly'];
+
+// Decides whether a recurring ritual should create today's decree.
+// It is created once per day, only while its time today is still ahead.
+export function ritualDue(r, now, tz = TZ) {
+  if (!r.active) return null;
+  const p = tzParts(now, tz);
+  const key = `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
+  if (r.last_key === key) return null;
+  if (r.freq === 'weekly' && p.wd !== r.weekday) return null;
+  const [hh, mm] = String(r.time).split(':').map(Number);
+  const deadline = localToUtc(p.y, p.m, p.d, hh, mm, tz);
+  if (deadline <= now) return null;
+  return { key, deadline };
+}
+
+export function validTime(s) {
+  return typeof s === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+}
+
+// What the slave can ask to exchange points for. The queen may refuse.
+export const REDEEM_ITEMS = {
+  sofa: { cost: 30, label: 'לשבת לידה על הספה ערב אחד' },
+  outfit: { cost: 50, label: 'לבחור מה המלכה תלבש מחר' },
+  free: { cost: 80, label: 'ערב אחד בלי פרוטוקול' },
+  pamper: { cost: 150, label: 'ערב שבו המלכה מפנקת אותך, בתנאים שלה' }
+};
+
 // Maps a verified Access email to a role. Anything else gets no role.
 export function roleForEmail(email, env) {
   if (typeof email !== 'string' || !email) return null;
