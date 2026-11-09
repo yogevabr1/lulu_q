@@ -504,6 +504,47 @@ function reviewResults() {
   <button class="btn quiet" data-act="reviewAll">לעבור שוב על כל הקלפים</button>`;
 }
 
+// ---------- ideas from Claude ----------
+
+const VIBE = { soft: 'רך', playful: 'שובב', strict: 'קשוח' };
+
+function ideasSheet(close) {
+  const I = S.ideas;
+  const chip = (act, key, cur, label) => `<button class="chip${cur === key ? ' on' : ''}" data-act="${act}" data-v="${key}">${label}</button>`;
+  const decks = [['', 'הכול'], ...DECK_ORDER.filter((k) => k !== 'reward' && k !== 'water').map((k) => [k, DECK_LABEL[k]])];
+  let results = '';
+  if (I.loading) results = '<p class="empty">חושבת על רעיונות…</p>';
+  else if (I.error) results = `<div class="banner"><span>${esc(I.error)}</span></div>`;
+  else if (I.list) results = I.list.length ? I.list.map((x, i) => `<div class="card ${x.severity === 'royal' ? 'overdue' : ''}">
+      <div class="meta"><span class="sev ${x.severity}">${SEV[x.severity]}</span>${x.needsHome ? '<span class="st">רק כשהבית פנוי</span>' : ''}</div>
+      <h3>${esc(x.title)}</h3><p class="when" style="margin:0">${esc(x.text)}</p>
+      <div class="row2"><button class="btn gold" data-act="ideaUse" data-i="${i}">גזרי</button><button class="btn quiet" data-act="ideaCard" data-i="${i}">לקלפים</button></div>
+    </div>`).join('') : '<p class="empty">לא יצא כלום. נסי שוב.</p>';
+  return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="רעיונות">
+    <div class="hd"><h2>✨ רעיונות</h2>${close}</div>
+    <div class="field"><span class="lbl">אווירה</span><div class="chips">${Object.entries(VIBE).map(([k, l]) => chip('ideaVibe', k, I.vibe, l)).join('')}</div></div>
+    <div class="field"><span class="lbl">נושא</span><div class="chiprow">${decks.map(([k, l]) => chip('ideaDeck', k, I.deck, l)).join('')}</div></div>
+    <div class="field"><span class="lbl">עוצמה</span><div class="chips">${[1, 2, 3].map((n) => chip('ideaLvl', String(n), String(I.lvl), '◆'.repeat(n))).join('')}</div></div>
+    <div class="field"><label for="i-wish">מה בא לך? (לא חובה)</label><input id="i-wish" maxlength="300" value="${esc(I.wish)}" placeholder="למשל: משהו עם הרגליים, לפני השינה"></div>
+    <button class="btn blood" data-act="ideaGo" ${I.loading ? 'disabled' : ''}>${I.list ? 'עוד רעיונות' : 'תני לי רעיונות'}</button>
+    <p class="when" style="text-align:center">רק בתוך מה ששניכם סימנתם ✓. מה שאחד סימן ✗ — לא יוצע.</p>
+    ${results}
+  </section></div>`;
+}
+
+async function askIdeas() {
+  const w = document.getElementById('i-wish');
+  if (w) S.ideas.wish = w.value;
+  S.ideas.loading = true; S.ideas.error = ''; render();
+  const r = await api('/ideas', { method: 'POST', body: { vibe: S.ideas.vibe, deck: S.ideas.deck || null, lvl: S.ideas.lvl, wish: S.ideas.wish } });
+  S.ideas.loading = false;
+  if (r.ideas) S.ideas.list = r.ideas;
+  else S.ideas.error = r.error === 'not configured' ? 'הרעיונות עוד לא מחוברים. צריך להוסיף מפתח ב־Cloudflare.'
+    : r.error === 'daily limit' ? 'הגעת למכסה היומית. מחר יש עוד.'
+    : 'לא הצלחתי להביא רעיונות. נסי שוב.';
+  if (S.sheet?.type === 'ideas') render();
+}
+
 // ---------- the guide ("how it works"), different for each of you ----------
 
 const TOUR = {
@@ -699,7 +740,8 @@ function cardsView() {
   return `
     <div class="homebar">
       <button class="btn ${st.homeFree ? 'gold' : 'quiet'}" data-act="home" aria-pressed="${st.homeFree}">${icon.home} ${st.homeFree ? 'הבית פנוי' : 'הבית לא פנוי'}</button>
-      <button class="btn quiet" data-act="newCard">+ קלף משלך</button>
+      <button class="btn quiet" data-act="ideas">✨ רעיונות</button>
+      <button class="btn quiet" data-act="newCard">+ קלף</button>
     </div>
     ${deckChips}
     <div style="display:flex;align-items:center;gap:8px"><span class="when" style="flex:none">עוצמה</span>${lvlChips}</div>
@@ -842,6 +884,7 @@ function sheetView() {
   const close = `<button class="x" data-act="close" aria-label="סגירה">${icon.x}</button>`;
   if (s.type === 'pts') return customPointsSheet();
   if (s.type === 'tour') return tourSheet();
+  if (s.type === 'ideas') return ideasSheet(close);
   if (s.type === 'offer') {
     return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="הצעת שירות">
       <div class="hd"><h2>הצעת שירות</h2>${close}</div>
@@ -914,6 +957,7 @@ function sheetView() {
       <div class="field"><span class="lbl">חומרת הצו</span><div class="chips">${chips}</div></div>
       <div class="field"><label for="f-note">הוראות לעבד (לא חובה)</label><textarea id="f-note" maxlength="1000" placeholder="איך בדיוק זה ייעשה…">${esc(S.draft.note)}</textarea></div>
       <button class="btn blood" data-act="create">חתמי וגזרי</button>
+      <button class="link" data-act="ideas" style="text-align:center">אין רעיון? ✨ רעיונות</button>
     </section></div>`;
   }
   const d = S.data.decrees.find((x) => x.id === s.id);
@@ -1123,6 +1167,31 @@ app.addEventListener('click', async (e) => {
     case 'tourNext': S.sheet.i++; return render();
     case 'tourBack': S.sheet.i = Math.max(0, S.sheet.i - 1); return render();
     case 'tourDone': try { localStorage.setItem('lulu_tour_' + S.me.role, '1'); } catch {} S.sheet = null; return render();
+    case 'ideas': {
+      keepDraft();
+      S.ideas = S.ideas || { vibe: 'playful', deck: '', lvl: 2, wish: '', list: null, loading: false, error: '' };
+      S.sheet = { type: 'ideas' }; return render();
+    }
+    case 'ideaVibe': case 'ideaDeck': case 'ideaLvl': {
+      const w = document.getElementById('i-wish'); if (w) S.ideas.wish = w.value;
+      if (a === 'ideaVibe') S.ideas.vibe = el.dataset.v;
+      if (a === 'ideaDeck') S.ideas.deck = el.dataset.v;
+      if (a === 'ideaLvl') S.ideas.lvl = Number(el.dataset.v);
+      return render();
+    }
+    case 'ideaGo': return askIdeas();
+    case 'ideaUse': {
+      const x = S.ideas.list[Number(el.dataset.i)];
+      S.draft = { title: x.title, deadline: defaultDeadline(), note: x.text, severity: x.severity, freq: 'once', time: '20:00', weekday: new Date().getDay() };
+      S.sheet = { type: 'new' }; return render();
+    }
+    case 'ideaCard': {
+      const x = S.ideas.list[Number(el.dataset.i)];
+      const lvl = x.severity === 'royal' ? 3 : x.severity === 'command' ? 2 : 1;
+      const r = await api('/cards', { method: 'POST', body: { title: x.title, text: x.text, deck: S.ideas.deck || 'service', lvl } });
+      if (r.cards) { S.cards = r; toast('נוסף לחפיסה'); } else toast('לא נשמר.');
+      return;
+    }
     case 'reviewStart': return startReview(false);
     case 'reviewAll': return startReview(true);
     case 'rvYes': case 'rvNo': return reviewVote(a === 'rvYes');

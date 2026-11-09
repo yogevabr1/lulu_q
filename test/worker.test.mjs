@@ -30,10 +30,15 @@ const otherKeys = await crypto.subtle.generateKey(
   true, ['sign', 'verify']);
 
 const pushes = [];
+const claudeCalls = [];
 globalThis.fetch = async (url, opts) => {
   if (String(url) === `https://${TEAM}/cdn-cgi/access/certs`) return new Response(JSON.stringify({ keys: [pubJwk] }));
   if (String(url).startsWith('https://push.example/')) { pushes.push({ url: String(url), auth: opts.headers.Authorization }); return new Response(null, { status: 201 }); }
   if (String(url).startsWith('https://gone.example/')) return new Response(null, { status: 410 });
+  if (String(url) === 'https://api.anthropic.com/v1/messages') {
+    claudeCalls.push({ headers: opts.headers, body: JSON.parse(opts.body) });
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: 'הנה: {"ideas":[{"title":"כוס תה","text":"להכין למלכה תה לפני השינה.","severity":"request","needsHome":false},{"title":"","text":"ריק"}]}' }] }));
+  }
   throw new Error('unexpected fetch ' + url);
 };
 const waits = [];
@@ -390,4 +395,24 @@ test('expectation review: you see the other mark on a card only after marking it
   r = await call('/api/cards', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'קלף חדש', deck: 'service', lvl: 1 } });
   assert.equal(r.data.review.slaveLeft, slaveLeft);
   assert.equal(r.data.review.queenLeft, before + 1);
+});
+
+test('ideas from Claude: queen only, needs a key, limits go into the prompt', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  assert.equal((await call('/api/ideas', { token: QUEEN, lulu: q, method: 'POST', body: {} })).data.error, 'not configured');
+
+  const withKey = { ...env, ANTHROPIC_API_KEY: 'test-key' };
+  assert.equal((await call('/api/ideas', { token: SLAVE, lulu: s, method: 'POST', body: {}, envOverride: withKey })).status, 403);
+  await call('/api/cards/pu03/vote', { token: SLAVE, lulu: s, method: 'POST', body: { ok: false } });
+  const r = await call('/api/ideas', { token: QUEEN, lulu: q, method: 'POST', body: { vibe: 'soft', deck: 'service', lvl: 1, wish: 'משהו נעים' }, envOverride: withKey });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data.ideas, [{ title: 'כוס תה', text: 'להכין למלכה תה לפני השינה.', severity: 'request', needsHome: false }]);
+  const sent = claudeCalls.at(-1);
+  assert.equal(sent.headers['x-api-key'], 'test-key');
+  const prompt = sent.body.messages[0].content;
+  assert.match(prompt, /REFUSED[^\n]*שתיקה/);      // a vetoed card is listed as off-limits
+  assert.match(prompt, /THE QUEEN WANTS: משהו נעים/);
+  assert.doesNotMatch(prompt + sent.body.system, /gmail|ליאור|יוגב/i); // nothing identifying
 });

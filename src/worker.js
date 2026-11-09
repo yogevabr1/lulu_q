@@ -6,6 +6,8 @@ import {
 } from './logic.js';
 import { DECKS, CARDS } from './cards.js';
 import { notify, vapidKeys } from './push.js';
+import { generateIdeas, VIBES } from './ideas.js';
+import { tzParts as _tz } from './logic.js';
 
 // ---------- responses ----------
 
@@ -551,6 +553,37 @@ async function handleApi(request, env, ctx, role, url) {
   if (path === '/review/done' && method === 'POST') {
     push([other(role)]);
     return json(await cardsPayload(env.DB, role));
+  }
+
+  // ----- task ideas from Claude (queen only) -----
+  if (path === '/ideas' && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    if (!env.ANTHROPIC_API_KEY) return err(503, 'not configured');
+    // At most 40 requests a day, as a cost guard.
+    const p = _tz(now);
+    const dayKey = `ideas_${p.y}-${p.m}-${p.d}`;
+    const used = Number((await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(dayKey).first())?.value || 0);
+    if (used >= 40) return err(429, 'daily limit');
+    await setSetting(env.DB, dayKey, used + 1).run();
+
+    const b = await readBody(request);
+    const settings = await getSettings(env.DB);
+    const cards = await allCards(env.DB);
+    const deck = DECKS[b.deck] ? b.deck : null;
+    const lvl = [1, 2, 3].includes(b.lvl) ? b.lvl : 2;
+    const pool = cards.filter((c) => c.enabled).filter((c) => (!deck || c.deck === deck) && (!c.needsHome || settings.homeFree));
+    const shuffle = (a) => a.map((x) => [Math.random(), x]).sort((m, n) => m[0] - n[0]).map((x) => x[1]);
+    const approved = shuffle(pool).slice(0, 30).map((c) => `${c.title}: ${c.text}`);
+    const refused = cards.filter((c) => c.votes.queen === 0 || c.votes.slave === 0).map((c) => c.title).slice(0, 80);
+    const recent = (await env.DB.prepare('SELECT title FROM decrees WHERE created > ? ORDER BY id DESC LIMIT 30')
+      .bind(now - 14 * 24 * 3600 * 1000).all()).results.map((r) => r.title);
+    const out = await generateIdeas(env, {
+      vibe: VIBES[b.vibe] ? b.vibe : 'playful', deckLabel: deck ? DECKS[deck].label : null, lvl,
+      wish: cleanText(b.wish, 300), approved, refused, recent,
+      homeFree: settings.homeFree, protocolLevel: settings.protocol ? settings.protocolLevel : null
+    });
+    if (out.error) return err(502, out.error);
+    return json({ ideas: out.ideas, left: 39 - used });
   }
 
   // ----- cards -----
