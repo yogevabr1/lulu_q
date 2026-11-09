@@ -171,6 +171,9 @@ async function enterCourt() {
   app.innerHTML = '';
   await refresh();
   checkPush();
+  let seen = true;
+  try { seen = localStorage.getItem('lulu_tour_' + S.me.role) === '1'; } catch {}
+  if (!seen && S.data) { S.sheet = { type: 'tour', i: 0 }; render(); }
 }
 
 async function refresh() {
@@ -246,7 +249,8 @@ function card(d, q, now) {
     else if (d.status === 'submitted') actions = `<div class="row2"><button class="btn gold" data-act="approve" data-id="${d.id}">אשרי ביצוע</button><button class="btn red" data-act="reject" data-id="${d.id}">לא מספיק טוב</button></div>`;
     else if (late) {
       const sent = d.remindedAt && now - d.remindedAt < 12 * 3600 * 1000;
-      actions = `<button class="btn red" data-act="remind" data-id="${d.id}" ${sent ? 'disabled' : ''}>${sent ? 'התזכורת נשלחה' : 'שלחי תזכורת חמורה'}</button>`;
+      actions = `<div class="row2"><button class="btn red" data-act="remind" data-id="${d.id}" ${sent ? 'disabled' : ''}>${sent ? 'התזכורת נשלחה' : 'תזכורת חמורה'}</button>
+        <button class="btn blood" style="font-size:16px;min-height:44px" data-act="punish" data-id="${d.id}">שלפי עונש</button></div>`;
     }
     if (d.status !== 'done') actions += `<button class="link" data-act="del" data-id="${d.id}">בטלי את הצו</button>`;
   } else {
@@ -278,6 +282,10 @@ function queenDecrees() {
       <div class="stat gold"><b>${c('submitted')}</b><span>לאישורך</span></div>
       <div class="stat red"><b>${c('overdue')}</b><span>באיחור</span></div>
     </div>
+    ${eveningPanel()}
+    ${summaryCard()}
+    ${offerRequests(true)}
+    ${checkinPrompts()}
     ${redeemRequests(true)}
     <div class="sec"><h2>מגילת הצווים</h2><span>נקודות העבד: ${points.total}</span></div>
     ${active.length ? active.map((d) => card(d, true, now)).join('') : '<p class="empty">אין צווים פתוחים. העבד מחכה לגזירה.</p>'}
@@ -288,6 +296,120 @@ function queenDecrees() {
 const WEEKDAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const WD_SHORT = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
 const ritualWhen = (r) => (r.freq === 'daily' ? 'כל יום' : 'כל יום ' + WEEKDAYS[r.weekday]) + ' עד ' + r.time;
+
+const MOOD = { free: 'זמינה', busy: 'לא להפריע', waiting: 'מחכה לך' };
+
+function eveningPanel() {
+  const st = S.data.settings;
+  const moods = Object.entries(MOOD).map(([k, l]) => `<button class="chip${st.mood === k ? ' on' : ''}" data-act="mood" data-m="${k}">${l}</button>`).join('');
+  const lv = [1, 2, 3].map((n) => `<button class="chip${st.protocolLevel === n ? ' on' : ''}" data-act="plevel" data-l="${n}" aria-label="עוצמה ${n}">${'◆'.repeat(n)}</button>`).join('');
+  return `<section class="panel">
+    <div class="field"><span class="lbl">מצב המלכה</span><div class="chips">${moods}</div></div>
+    <div class="field">
+      <span class="lbl">פרוטוקול ${st.protocol ? `<b class="live">פעיל מ־${hhmm(new Date(st.protocolSince))}</b>` : ''}</span>
+      <div class="chips" style="grid-template-columns:1.4fr repeat(3,minmax(0,1fr))">
+        <button class="chip${st.protocol ? ' on' : ''}" data-act="protocol">${st.protocol ? 'כבי' : 'הפעילי'}</button>${lv}
+      </div>
+    </div>
+  </section>`;
+}
+
+function slaveStatus() {
+  const st = S.data.settings;
+  const parts = [];
+  if (st.protocol) parts.push(`<div class="banner gold"><span><strong>הפרוטוקול פעיל</strong> · עוצמה ${'◆'.repeat(st.protocolLevel)} · פונים רק "המלכה"</span></div>`);
+  parts.push(`<div class="moodline ${st.mood}"><span class="dotm"></span>המלכה: <strong>${MOOD[st.mood]}</strong></div>`);
+  return parts.join('');
+}
+
+function summaryCard() {
+  const sm = S.data.settings.summary;
+  if (!sm || sm.dismissed || S.data.now - sm.at > 3 * 24 * 3600 * 1000) return '';
+  return `<section class="hero">
+    <div style="display:flex;justify-content:space-between;align-items:center"><span class="k">סיכום השבוע</span><button class="x" data-act="dismissSummary" aria-label="סגירה">${icon.x}</button></div>
+    <div class="stats">
+      <div class="stat"><b>${sm.done}</b><span>בוצעו</span></div>
+      <div class="stat${sm.late ? ' red' : ''}"><b>${sm.late}</b><span>איחורים</span></div>
+      <div class="stat gold"><b>${sm.up - sm.down}</b><span>נקודות נטו</span></div>
+    </div>
+    <span class="when">${sm.up} נקודות נצברו, ${sm.down} ירדו${sm.offers ? ` · ${sm.offers} הצעות שירות` : ''}.</span>
+    ${sm.forgotten ? `<span class="when">הכי נשכח: <strong>${esc(sm.forgotten)}</strong></span>` : '<span class="when">שום טקס לא נשכח השבוע.</span>'}
+  </section>`;
+}
+
+function offerRequests(q) {
+  const list = (S.data.offers || []).filter((o) => q ? o.status === 'pending' : true).slice(0, q ? 20 : 3);
+  if (!list.length) return '';
+  return list.map((o) => {
+    if (q) return `<div class="banner gold" style="flex-direction:column;align-items:stretch">
+      <span>העבד מציע שירות: <strong>${esc(o.title)}</strong>${o.note ? ` — ${esc(o.note)}` : ''}</span>
+      <div class="row2"><button class="btn gold" data-act="offerYes" data-id="${o.id}">הפכי לצו</button><button class="btn quiet" data-act="offerNo" data-id="${o.id}">לא עכשיו</button></div>
+    </div>`;
+    const st = o.status === 'pending' ? 'ממתין למלכה…' : o.status === 'accepted' ? 'המלכה הפכה לצו' : 'המלכה דחתה';
+    return `<div class="moodline"><span>ההצעה שלך: <strong>${esc(o.title)}</strong> — ${st}</span></div>`;
+  }).join('');
+}
+
+function checkinPrompts() {
+  const open = (S.data.checkins || []).filter((c) => !c.answered);
+  return open.map((c) => `<div class="banner gold" style="flex-direction:column;align-items:stretch">
+    <span><strong>צ'ק־אין אחרי "${esc(c.title)}"</strong>. רק אתם רואים, ואחד לא רואה את השני עד ששניכם עונים.</span>
+    <button class="btn gold" data-act="checkin" data-id="${c.id}">לענות</button>
+  </div>`).join('');
+}
+
+function checkinResults() {
+  const list = (S.data.checkins || []).filter((c) => c.answered);
+  if (!list.length) return '<p class="empty">אין עדיין. צ\'ק־אין נפתח אחרי כל קלף ◆◆◆.</p>';
+  const them = S.me.role === 'queen' ? 'העבד' : 'המלכה';
+  return list.map((c) => `<div class="limrow">
+    <div class="lt"><span class="t">${esc(c.title)}</span><span class="d">${fmtWhen(c.created)}</span></div>
+    <p>אני: ${'★'.repeat(c.mine.score)}${'☆'.repeat(5 - c.mine.score)}${c.mine.note ? ` — ${esc(c.mine.note)}` : ''}</p>
+    <p>${them}: ${c.theirs ? `${'★'.repeat(c.theirs.score)}${'☆'.repeat(5 - c.theirs.score)}${c.theirs.note ? ` — ${esc(c.theirs.note)}` : ''}` : 'עוד לא ענה. התשובה תופיע כששניכם עניתם.'}</p>
+  </div>`).join('');
+}
+
+// ---------- the guide ("how it works"), different for each of you ----------
+
+const TOUR = {
+  queen: [
+    ['ברוכה הבאה לחדר הכס', ['כאן את גוזרת, העבד מבצע, ורק את מאשרת.', 'זה כלי עזר למשחק שלכם, לא המשחק עצמו. מותר לכבות אותו לימים.']],
+    ['גזירה', ['היהלום האדום שבתחתית פותח גזירה חדשה: משימה, עד מתי, וחומרה (בקשה, פקודה, צו מלכותי).', 'אפשר לבחור "כל יום" או "כל שבוע" — והצו ייווצר לבד, עם טקסים מוצעים כמו קפה למיטה או דיווח ערב.']],
+    ['אישור', ['כשהעבד מגיש, הצו מופיע בזהב עם הדיווח שלו. "אשרי ביצוע" — אפשר עם בונוס. "לא מספיק טוב" — חוזר לביצוע, ואפשר גם עם עונש.', 'צו באיחור? "תזכורת חמורה" או "שלפי עונש" — קלף עונש מאושר נשלף ונשלח בלחיצה.']],
+    ['קלפים', ['מסך "קלפים": שבע חפיסות, מסנן עוצמה (◆ עד ◆◆◆), שליפה אקראית או בחירה, ו"הענקי לעבד".', 'השפלה, כאב ומים — רק כשמסומן "הבית פנוי". ב"+ קלף משלך" מוסיפים קלפים חדשים.']],
+    ['נקודות', ['העבד צובר על צווים שבוצעו, ומפסיד על הפרות. במסך "נקודות" יש כפתורים מהירים: בונוס, פנייה שגויה, ויכוח.', 'כשהעבד מבקש להמיר נקודות — הבקשה מופיעה אצלך. את מחליטה.']],
+    ['מצב הערב', ['למעלה במסך הצווים: מצב המלכה (זמינה, לא להפריע, מחכה לך) ומתג הפרוטוקול עם עוצמה לערב.', 'העבד יכול להציע שירות ביוזמתו — את הופכת לצו או מוותרת.']],
+    ['גבולות וצ\'ק־אין', ['במסך "חוקים" כל אחד מכם יכול לפסול כל קלף. קלף שאחד פוסל — לא נשלף. קלפים מסומנים "ירוק" נעולים עד ששניכם מאשרים.', 'אחרי כל קלף ◆◆◆ שניכם מקבלים צ\'ק־אין קצר. אף אחד לא רואה את התשובה של השני עד ששניכם עניתם.']],
+    ['ביטחון', ['⏸ למעלה — הפוגה: עוצר הכול, לשניכם, בכל רגע. 🔒 — נעילה מיידית. אחרי 5 דקות ברקע האפליקציה ננעלת לבד.', 'ההתראות תמיד ניטרליות: "יש עדכון חדש". מפעילים אותן במסך "חוקים".']]
+  ],
+  slave: [
+    ['יומן העבד', ['כאן אתה רואה מה המלכה גזרה, ועד מתי. אתה מבצע ומגיש — רק היא מאשרת.', 'זה כלי עזר למשחק שלכם, לא המשחק עצמו.']],
+    ['הצווים', ['למעלה — הצו הבא וכמה זמן נשאר. "ביצעתי — הגש לאישורה" שולח לה, עם דיווח אם תרצה.', 'אם היא דוחה, הצו חוזר אליך עם הסיבה. איחור — אדום, ואולי עונש.']],
+    ['קלפים ופרסים', ['קלפים שהמלכה שולפת מגיעים אליך כצווים, עם החפיסה שלהם.', 'פרס מגיע בזהב — "לבקש לממש" כשתרצה להשתמש בו.']],
+    ['נקודות', ['בקשה 5, פקודה 10, צו מלכותי 20 — וחצי באיחור. הפרות מורידות.', 'במסך "נקודות" אפשר לבקש להמיר. המלכה רשאית לסרב.']],
+    ['מצב המלכה והצעת שירות', ['למעלה תראה את מצב המלכה, ומתי הפרוטוקול פעיל — אז פונים רק "המלכה".', '"הצעת שירות" — אתה מציע משהו ביוזמתך, והיא מחליטה אם זה הופך לצו.']],
+    ['גבולות וצ\'ק־אין', ['במסך "חוקים" אתה יכול לפסול כל קלף, בלי להסביר. קלפים מסומנים "ירוק" נעולים עד ששניכם מאשרים.', 'אחרי כל קלף ◆◆◆ — צ\'ק־אין קצר ופרטי. התשובות נחשפות רק כששניכם עניתם.']],
+    ['ביטחון', ['⏸ למעלה — הפוגה: עוצר הכול, בכל רגע, בלי עונש. 🔒 — נעילה מיידית.', 'ההתראות תמיד ניטרליות. מפעילים אותן במסך "חוקים".']]
+  ]
+};
+
+function tourSheet() {
+  const steps = TOUR[S.me.role];
+  const i = Math.min(S.sheet.i, steps.length - 1);
+  const [title, paras] = steps[i];
+  const last = i === steps.length - 1;
+  return `<div class="sheetwrap"><section class="sheet tour" role="dialog" aria-modal="true" aria-label="איך זה עובד">
+    <div class="hd"><span class="k">${i + 1} / ${steps.length}</span><button class="x" data-act="tourDone" aria-label="סגירה">${icon.x}</button></div>
+    <div class="mono big" style="margin:8px auto 18px"><span>R</span></div>
+    <h2 style="text-align:center">${esc(title)}</h2>
+    ${paras.map((p) => `<p>${esc(p)}</p>`).join('')}
+    <div class="tdots">${steps.map((_, j) => `<span class="${j === i ? 'on' : ''}"></span>`).join('')}</div>
+    <div class="row2">
+      <button class="btn quiet" data-act="tourBack" ${i === 0 ? 'disabled' : ''}>הקודם</button>
+      ${last ? '<button class="btn gold" data-act="tourDone">סיום</button>' : '<button class="btn gold" data-act="tourNext">הבא</button>'}
+    </div>
+  </section></div>`;
+}
 
 function ritualsList() {
   const list = S.data.rituals || [];
@@ -339,7 +461,10 @@ function slaveDecrees() {
       <div class="stat gold"><b>${points.total}</b><span>נקודות צייתנות</span></div>
       <div class="stat${overdue.length ? ' red' : ''}"><b>${open.length}</b><span>לביצוע</span></div>
     </div>
-    ${hero}${banners}${redeemRequests(false)}
+    ${slaveStatus()}
+    ${hero}${banners}${checkinPrompts()}${redeemRequests(false)}
+    <button class="btn" data-act="offer" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.crown}הצעת שירות למלכה</button>
+    ${offerRequests(false)}
     <div class="sec"><h2>מה עליך לבצע</h2><span>אין לך הרשאה לערוך צווים</span></div>
     ${open.length ? open.map((d) => card(d, false, now)).join('') : '<p class="empty">אין צווים פתוחים. כרגע.</p>'}
     ${rest.map((d) => card(d, false, now)).join('')}
@@ -504,6 +629,9 @@ function limitsView(q) {
       <span class="when">${pushTxt}</span>
       ${S.pushState === 'on' ? '<button class="btn quiet" data-act="pushTest">שליחת התראת בדיקה</button>' : S.pushState === 'denied' || S.pushState === 'unsupported' ? '' : '<button class="btn gold" data-act="pushOn">הפעלת התראות</button>'}
     </section>
+    <button class="btn" data-act="tour">איך האפליקציה עובדת?</button>
+    <div class="sec"><h2>צ'ק־אינים</h2><span>אחרי כל ◆◆◆</span></div>
+    ${checkinResults()}
     <div class="sec"><h2>ספר החוקים</h2><span>לשניכם</span></div>
     ${guide}
     <div class="sec"><h2>הגבולות שלי</h2><span>קלף שאחד מכם פוסל — לא נשלף</span></div>
@@ -557,6 +685,14 @@ async function enablePush() {
 
 // ---------- sheets ----------
 
+function deadlineFrom(when) {
+  const n = new Date();
+  if (when === 'now') return Date.now() + 3600 * 1000;
+  if (when === 'tonight') { n.setHours(23, 30, 0, 0); return Math.max(n.getTime(), Date.now() + 3600 * 1000); }
+  if (when === 'tomorrow') { n.setDate(n.getDate() + 1); n.setHours(20, 0, 0, 0); return n.getTime(); }
+  return null;
+}
+
 function defaultDeadline() {
   const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(20, 0, 0, 0);
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T20:00`;
@@ -566,6 +702,41 @@ function sheetView() {
   const s = S.sheet;
   const close = `<button class="x" data-act="close" aria-label="סגירה">${icon.x}</button>`;
   if (s.type === 'pts') return customPointsSheet();
+  if (s.type === 'tour') return tourSheet();
+  if (s.type === 'offer') {
+    return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="הצעת שירות">
+      <div class="hd"><h2>הצעת שירות</h2>${close}</div>
+      <p class="when">מה תרצה לעשות בשביל המלכה? היא תחליט אם זה הופך לצו.</p>
+      <div class="field"><label for="o-title">השירות</label><input id="o-title" maxlength="200" placeholder="למשל: אמבט רגליים הערב"></div>
+      <div class="field"><label for="o-note">פרטים (לא חובה)</label><textarea id="o-note" maxlength="1000" placeholder="מתי, איך…"></textarea></div>
+      <button class="btn blood" data-act="doOffer">הגש למלכה</button>
+    </section></div>`;
+  }
+  if (s.type === 'offerYes') {
+    const o = (S.data.offers || []).find((x) => x.id === s.id);
+    if (!o) return '';
+    const sev = Object.keys(SEV).map((k) => `<button class="chip${s.severity === k ? ' on' : ''}" data-act="oSev" data-sev="${k}">${SEV[k]}</button>`).join('');
+    const opts = [['none', 'בלי מועד'], ['now', 'תוך שעה'], ['tonight', 'עד הלילה'], ['tomorrow', 'עד מחר בערב']];
+    return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="הפיכה לצו">
+      <div class="hd"><h2>הפכי לצו</h2>${close}</div>
+      <p class="quote">${esc(o.title)}${o.note ? ` — ${esc(o.note)}` : ''}</p>
+      <div class="field"><span class="lbl">חומרה</span><div class="chips">${sev}</div></div>
+      <div class="field"><span class="lbl">עד מתי</span><div class="chips" style="grid-template-columns:repeat(2,minmax(0,1fr))">${opts.map(([k, l]) => `<button class="chip${s.when === k ? ' on' : ''}" data-act="oWhen" data-w="${k}">${l}</button>`).join('')}</div></div>
+      <button class="btn blood" data-act="doOfferYes">חתמי וגזרי</button>
+    </section></div>`;
+  }
+  if (s.type === 'checkin') {
+    const c = (S.data.checkins || []).find((x) => x.id === s.id);
+    if (!c) return '';
+    return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="צ'ק־אין">
+      <div class="hd"><h2>צ'ק־אין</h2>${close}</div>
+      <p class="quote">${esc(c.title)}</p>
+      <div class="field"><span class="lbl">איך היה בשבילך?</span><div class="chips" style="grid-template-columns:repeat(5,minmax(0,1fr))">${[1, 2, 3, 4, 5].map((n) => `<button class="chip${s.score === n ? ' on' : ''}" data-act="ciScore" data-n="${n}" aria-label="${n} מתוך 5">${n}</button>`).join('')}</div>
+        <span class="when">1 — לא טוב לי · 5 — מושלם</span></div>
+      <div class="field"><label for="ci-note">מה לשמור, מה לשנות (לא חובה)</label><textarea id="ci-note" maxlength="500" placeholder="יותר חזק, פחות זמן, לא את זה שוב…"></textarea></div>
+      <button class="btn blood" data-act="doCheckin" ${s.score ? '' : 'disabled'}>שליחה</button>
+    </section></div>`;
+  }
   if (s.type === 'send') {
     const c = S.cards?.cards.find((x) => x.id === s.card);
     if (!c) return '';
@@ -632,7 +803,8 @@ function sheetView() {
       <div class="hd"><h2>לא מספיק טוב</h2>${close}</div>
       <p class="quote">${esc(d.title)}</p>
       <div class="field"><label for="f-why">מה לא היה טוב?</label><textarea id="f-why" maxlength="500" placeholder="הצו חוזר לביצוע…"></textarea></div>
-      <button class="btn blood" data-act="doReject" data-id="${d.id}">החזירי לביצוע</button>
+      <div class="row2"><button class="btn" data-act="doReject" data-id="${d.id}">החזירי לביצוע</button>
+        <button class="btn blood" style="font-size:16px" data-act="doReject" data-punish="1" data-id="${d.id}">החזירי + עונש</button></div>
     </section></div>`;
   }
   return '';
@@ -729,10 +901,7 @@ app.addEventListener('click', async (e) => {
     case 'sendCard': if (!S.drawn) return; S.sheet = { type: 'send', card: S.drawn, when: S.deck === 'reward' ? 'none' : 'tonight' }; return render();
     case 'sendWhen': S.sheet.when = el.dataset.w; return render();
     case 'doSend': {
-      const n = new Date(); let dl = null;
-      if (S.sheet.when === 'now') dl = Date.now() + 3600 * 1000;
-      if (S.sheet.when === 'tonight') { n.setHours(23, 30, 0, 0); dl = Math.max(n.getTime(), Date.now() + 3600 * 1000); }
-      if (S.sheet.when === 'tomorrow') { n.setDate(n.getDate() + 1); n.setHours(20, 0, 0, 0); dl = n.getTime(); }
+      const dl = deadlineFrom(S.sheet.when);
       el.disabled = true;
       const r = await api(`/cards/${S.sheet.card}/send`, { method: 'POST', body: { deadline: dl } });
       if (r.error) {
@@ -771,6 +940,50 @@ app.addEventListener('click', async (e) => {
       return;
     }
     case 'pushOn': return enablePush().then(render);
+    case 'mood': { const r = await api('/settings', { method: 'POST', body: { mood: el.dataset.m } }); return act(r, el.dataset.m === 'waiting' ? 'העבד קיבל התראה' : null); }
+    case 'protocol': {
+      const r = await api('/settings', { method: 'POST', body: { protocol: !S.data.settings.protocol } });
+      if (r.error === 'paused') return toast('הפוגה פעילה.');
+      return act(r, S.data.settings.protocol ? 'הפרוטוקול כבוי' : 'הפרוטוקול פעיל. העבד קיבל התראה.');
+    }
+    case 'plevel': { const r = await api('/settings', { method: 'POST', body: { protocolLevel: Number(el.dataset.l) } }); return act(r); }
+    case 'dismissSummary': { const r = await api('/settings', { method: 'POST', body: { dismissSummary: true } }); return act(r); }
+    case 'offer': S.sheet = { type: 'offer' }; render(); return document.getElementById('o-title')?.focus();
+    case 'doOffer': {
+      const title = document.getElementById('o-title')?.value.trim();
+      if (!title) return document.getElementById('o-title')?.focus();
+      el.disabled = true;
+      const r = await api('/offers', { method: 'POST', body: { title, note: document.getElementById('o-note')?.value || '' } });
+      return act(r, 'ההצעה נשלחה למלכה');
+    }
+    case 'offerYes': S.sheet = { type: 'offerYes', id, severity: 'command', when: 'tonight' }; return render();
+    case 'oSev': S.sheet.severity = el.dataset.sev; return render();
+    case 'oWhen': S.sheet.when = el.dataset.w; return render();
+    case 'doOfferYes': {
+      el.disabled = true;
+      const r = await api(`/offers/${S.sheet.id}/accept`, { method: 'POST', body: { severity: S.sheet.severity, deadline: deadlineFrom(S.sheet.when) } });
+      if (r.error === 'paused') { S.sheet = null; return toast('הפוגה פעילה.'); }
+      return act(r, 'נגזר');
+    }
+    case 'offerNo': { const r = await api(`/offers/${id}/decline`, { method: 'POST' }); return act(r); }
+    case 'punish': {
+      const d = S.data.decrees.find((x) => x.id === id);
+      el.disabled = true;
+      const r = await api('/punish', { method: 'POST', body: { because: d ? d.title : '', deadline: deadlineFrom('tonight') } });
+      if (r.error) return toast(r.error === 'paused' ? 'הפוגה פעילה.' : r.error === 'no cards' ? 'אין קלפי עונש מאושרים.' : 'לא הצליח.');
+      return act(r, `נשלף: ${r.punished.title}`);
+    }
+    case 'checkin': S.sheet = { type: 'checkin', id, score: 0 }; return render();
+    case 'ciScore': { const note = document.getElementById('ci-note')?.value || ''; S.sheet.score = Number(el.dataset.n); render(); const t = document.getElementById('ci-note'); if (t) t.value = note; return; }
+    case 'doCheckin': {
+      el.disabled = true;
+      const r = await api(`/checkins/${S.sheet.id}`, { method: 'POST', body: { score: S.sheet.score, note: document.getElementById('ci-note')?.value || '' } });
+      return act(r, 'תודה. נשמר.');
+    }
+    case 'tour': S.sheet = { type: 'tour', i: 0 }; return render();
+    case 'tourNext': S.sheet.i++; return render();
+    case 'tourBack': S.sheet.i = Math.max(0, S.sheet.i - 1); return render();
+    case 'tourDone': try { localStorage.setItem('lulu_tour_' + S.me.role, '1'); } catch {} S.sheet = null; return render();
     case 'pushTest': await api('/push/test', { method: 'POST' }); return toast('נשלחה התראת בדיקה');
     case 'backdrop': case 'close': S.sheet = null; return render();
     case 'new':
@@ -815,7 +1028,15 @@ app.addEventListener('click', async (e) => {
     case 'bonus': S.sheet.bonus = Number(el.dataset.b); return render();
     case 'doApprove': { el.disabled = true; const r = await api(`/decrees/${id}/approve`, { method: 'POST', body: { bonus: S.sheet.bonus || 0 } }); return act(r, 'אושר'); }
     case 'reject': S.sheet = { type: 'reject', id }; return render();
-    case 'doReject': { el.disabled = true; const r = await api(`/decrees/${id}/reject`, { method: 'POST', body: { reason: document.getElementById('f-why')?.value || '' } }); return act(r, 'הצו חזר לביצוע'); }
+    case 'doReject': {
+      el.disabled = true;
+      const d = S.data.decrees.find((x) => x.id === id);
+      const r = await api(`/decrees/${id}/reject`, { method: 'POST', body: { reason: document.getElementById('f-why')?.value || '' } });
+      if (r.error || !el.dataset.punish) return act(r, 'הצו חזר לביצוע');
+      const p2 = await api('/punish', { method: 'POST', body: { because: d ? d.title : '', deadline: deadlineFrom('tonight') } });
+      if (p2.error) return act(r, 'הצו חזר לביצוע. לא נמצא קלף עונש מאושר.');
+      return act(p2, `הצו חזר, ונשלף: ${p2.punished.title}`);
+    }
     case 'remind': { el.disabled = true; const r = await api(`/decrees/${id}/remind`, { method: 'POST' }); return act(r, 'התזכורת נשלחה'); }
     case 'del': {
       if (!confirm('לבטל את הצו?')) return;

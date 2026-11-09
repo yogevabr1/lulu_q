@@ -100,6 +100,13 @@ export function validTime(s) {
   return typeof s === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
 }
 
+// The queen's status, shown at the top of the slave's screen.
+export const MOODS = {
+  free: { label: 'זמינה' },
+  busy: { label: 'לא להפריע' },
+  waiting: { label: 'מחכה לך' }
+};
+
 // What the slave can ask to exchange points for. The queen may refuse.
 export const REDEEM_ITEMS = {
   sofa: { cost: 30, label: 'לשבת לידה על הספה ערב אחד' },

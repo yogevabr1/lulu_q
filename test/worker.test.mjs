@@ -297,3 +297,71 @@ test('rituals and point redemptions', async () => {
   assert.equal(r.data.points.total, start - 30);
   assert.equal((await call(`/api/redeem/${id}/deny`, { token: QUEEN, lulu: q, method: 'POST' })).status, 409);
 });
+
+test('offers, quick punishment, check-ins, mood, protocol, weekly summary', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  await env.DB.prepare(`UPDATE settings SET value = '0' WHERE key = 'paused'`).run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+
+  // Offers
+  assert.equal((await call('/api/offers', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'x' } })).status, 403);
+  let r = await call('/api/offers', { token: SLAVE, lulu: s, method: 'POST', body: { title: 'אמבט רגליים הערב', note: 'עם מלח' } });
+  const offer = r.data.offers[0];
+  assert.equal(offer.status, 'pending');
+  assert.equal((await call(`/api/offers/${offer.id}/accept`, { token: SLAVE, lulu: s, method: 'POST' })).status, 403);
+  r = await call(`/api/offers/${offer.id}/accept`, { token: QUEEN, lulu: q, method: 'POST', body: { severity: 'royal' } });
+  const fromOffer = r.data.decrees.find((d) => d.title === 'אמבט רגליים הערב');
+  assert.equal(fromOffer.severity, 'royal');
+  assert.equal(r.data.offers.find((o) => o.id === offer.id).status, 'accepted');
+
+  // Quick punishment only draws allowed punishment cards
+  r = await call('/api/punish', { token: QUEEN, lulu: q, method: 'POST', body: { because: 'כביסה' } });
+  assert.equal(r.status, 200);
+  const pun = r.data.decrees.find((d) => d.kind === 'card' && d.deck === 'punish' && d.note.includes('בעקבות: כביסה'));
+  assert.ok(pun);
+  assert.equal((await call('/api/punish', { token: SLAVE, lulu: s, method: 'POST' })).status, 403);
+
+  // Check-in after a strong card; hidden until both answer
+  await call('/api/settings', { token: QUEEN, lulu: q, method: 'POST', body: { homeFree: true } });
+  r = await call('/api/cards/pa02/send', { token: QUEEN, lulu: q, method: 'POST' });
+  const strong = r.data.decrees.find((d) => d.title === 'הכלי' && d.status === 'open');
+  await call(`/api/decrees/${strong.id}/submit`, { token: SLAVE, lulu: s, method: 'POST' });
+  r = await call(`/api/decrees/${strong.id}/approve`, { token: QUEEN, lulu: q, method: 'POST' });
+  const ci = r.data.checkins.find((c) => c.title === 'הכלי');
+  assert.equal(ci.answered, false);
+  r = await call(`/api/checkins/${ci.id}`, { token: QUEEN, lulu: q, method: 'POST', body: { score: 5, note: 'עוד' } });
+  assert.equal(r.data.checkins.find((c) => c.id === ci.id).theirs, null);
+  r = await call('/api/decrees', { token: SLAVE, lulu: s });
+  assert.equal(r.data.checkins.find((c) => c.id === ci.id).theirs, null); // slave can't peek
+  assert.equal(r.data.checkins.find((c) => c.id === ci.id).answered, false);
+  r = await call(`/api/checkins/${ci.id}`, { token: SLAVE, lulu: s, method: 'POST', body: { score: 4, note: 'קצת פחות' } });
+  const both = r.data.checkins.find((c) => c.id === ci.id);
+  assert.deepEqual([both.mine.score, both.theirs.score, both.theirs.note], [4, 5, 'עוד']);
+  assert.equal((await call(`/api/checkins/${ci.id}`, { token: SLAVE, lulu: s, method: 'POST', body: { score: 1 } })).status, 409);
+
+  // Mood and protocol: queen only; pause switches the protocol off
+  assert.equal((await call('/api/settings', { token: SLAVE, lulu: s, method: 'POST', body: { mood: 'waiting' } })).status, 403);
+  r = await call('/api/settings', { token: QUEEN, lulu: q, method: 'POST', body: { mood: 'waiting', protocol: true, protocolLevel: 3 } });
+  assert.deepEqual([r.data.settings.mood, r.data.settings.protocol, r.data.settings.protocolLevel], ['waiting', true, 3]);
+  r = await call('/api/settings', { token: SLAVE, lulu: s, method: 'POST', body: { paused: true } });
+  assert.equal(r.data.settings.protocol, false);
+  await call('/api/settings', { token: SLAVE, lulu: s, method: 'POST', body: { paused: false } });
+
+  // Weekly summary: Sunday 08:00+ Israel time, once per week
+  const { runSchedule } = await import('../src/worker.js');
+  const realNow = Date.now;
+  Date.now = () => Date.parse('2026-11-15T07:00:00Z'); // Sunday 09:00 local
+  try {
+    pushes.length = 0;
+    await runSchedule(env);
+  } finally { Date.now = realNow; }
+  r = await call('/api/decrees', { token: QUEEN, lulu: q });
+  const sm = r.data.settings.summary;
+  assert.equal(sm.week, '2026-11-15');
+  assert.ok(sm.done >= 1);
+  Date.now = () => Date.parse('2026-11-15T09:00:00Z');
+  try { await runSchedule(env); } finally { Date.now = realNow; }
+  r = await call('/api/settings', { token: QUEEN, lulu: q, method: 'POST', body: { dismissSummary: true } });
+  assert.equal(r.data.settings.summary.dismissed, true);
+});

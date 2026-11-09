@@ -153,3 +153,18 @@ details.guide p{margin:0 0 10px;font-size:15px;line-height:1.55;color:var(--soft
 .limrow .them{font-size:13px;color:var(--muted)}
 .them b.ok{color:var(--gold)} .them b.no{color:var(--rose)} .them b.wait{color:var(--faint)}
 .nav .in > *{min-width:0}
+
+/* ---------- evening panel, mood, guide ---------- */
+.panel{background:var(--surface);border:1px solid var(--line);padding:14px;display:flex;flex-direction:column;gap:12px}
+.panel .lbl b.live{color:var(--gold);font-weight:700;margin-right:6px}
+.moodline{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted);padding:8px 12px;border:1px solid var(--line);background:var(--surface)}
+.moodline .dotm{width:9px;height:9px;border-radius:50%;background:var(--faint);flex:none}
+.moodline.free .dotm{background:#7fa36b} .moodline.busy .dotm{background:var(--rose)} .moodline.waiting .dotm{background:var(--gold)}
+.moodline.waiting{border-color:var(--gold);color:var(--text)}
+.sheet.tour{min-height:70vh;justify-content:flex-start}
+.sheet.tour .k{font-family:'Bellefair',Georgia,serif;color:var(--gold);letter-spacing:.15em}
+.sheet.tour h2{font-size:26px;color:var(--text)}
+.sheet.tour p{margin:0;font-size:16px;line-height:1.6;color:var(--soft)}
+.tdots{display:flex;gap:8px;justify-content:center;margin:auto 0 6px;padding-top:16px}
+.tdots span{width:7px;height:7px;transform:rotate(45deg);border:1px solid var(--gold)}
+.tdots span.on{background:var(--gold)}
