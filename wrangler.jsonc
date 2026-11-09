@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lulu-q",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Every request goes through the Worker first, so nothing (not even the
+    // HTML) is served unless Cloudflare Access says it is one of the two emails.
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lulu-db",
+      "database_id": "914af5b2-a81c-445c-86cf-7091932fe353"
+    }
+  ],
+  "vars": {
+    // Only these two accounts get in. Anyone else gets a plain 404.
+    "QUEEN_EMAIL": "liorgra8@gmail.com",
+    "SLAVE_EMAIL": "yogevabr@gmail.com",
+    // Filled in after Cloudflare Access is turned on. While empty, the app
+    // refuses every request (fails closed).
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  },
+  "observability": { "enabled": true }
+}

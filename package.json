@@ -1,0 +1,11 @@
+{
+  "name": "lulu-q",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/check.mjs",
+    "test": "node --experimental-sqlite --test test/*.test.mjs",
+    "deploy": "wrangler deploy"
+  }
+}
