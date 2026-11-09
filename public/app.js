@@ -271,11 +271,28 @@ function card(d, q, now) {
   const note = d.note ? `<p class="quote">${d.kind !== 'decree' ? '' : q ? 'הערתך: ' : 'הוראות המלכה: '}${esc(d.note)}</p>` : '';
   const report = d.status === 'submitted' && d.report ? `<p class="quote">דיווח העבד: ${esc(d.report)}</p>` : '';
   const rejected = d.status !== 'done' && d.status !== 'submitted' && d.rejectReason ? `<p class="quote red">${q ? 'דחית' : 'המלכה דחתה'}: ${esc(d.rejectReason)}</p>` : '';
+  const ex = d.extension;
+  const openish = d.status === 'open' || late;
+  let extHtml = '';
+  if (ex && ex.status === 'pending' && openish) {
+    extHtml = q
+      ? `<div class="banner gold" style="flex-direction:column;align-items:stretch">
+          <span><strong>בקשת הארכה עד ${fmtWhen(ex.until)}</strong> — "${esc(ex.reason)}"</span>
+          <input id="ex-ans-${d.id}" maxlength="300" placeholder="מילה ממך (לא חובה)" style="background:var(--bg);border:1px solid var(--line2);color:var(--text);min-height:44px;padding:8px 12px;font-size:15px">
+          <div class="row2"><button class="btn gold" data-act="extYes" data-id="${d.id}">אשרי</button><button class="btn quiet" data-act="extNo" data-id="${d.id}">סרבי</button></div>
+        </div>`
+      : `<span class="st submitted">ביקשת הארכה עד ${fmtWhen(ex.until)} — ממתין למלכה</span>`;
+  } else if (ex && ex.status !== 'pending' && openish && !q) {
+    extHtml = `<p class="quote${ex.status === 'denied' ? ' red' : ''}">${ex.status === 'approved' ? 'המלכה אישרה הארכה' : 'המלכה סירבה להארכה'}${ex.answer ? `: ${esc(ex.answer)}` : ''}</p>`;
+  }
+  if (!q && openish && !reward && d.deadline && !(ex && ex.status === 'pending')) {
+    actions += `<button class="link" data-act="extAsk" data-id="${d.id}">בקשת הארכה</button>`;
+  }
   return `<article class="card ${d.status}">
     <div class="meta">${label}<span class="st ${doing ? 'doing' : d.status}">${statusTxt}</span></div>
     <h3>${esc(d.title)}</h3>
     <span class="when${late ? ' late' : ''}">${when}</span>
-    ${note}${report}${rejected}${actions}
+    ${note}${report}${rejected}${extHtml}${actions}
   </article>`;
 }
 
@@ -1008,6 +1025,18 @@ function sheetView() {
   const close = `<button class="x" data-act="close" aria-label="סגירה">${icon.x}</button>`;
   if (s.type === 'pts') return customPointsSheet();
   if (s.type === 'tour') return tourSheet();
+  if (s.type === 'extend') {
+    const d = S.data.decrees.find((x) => x.id === s.id);
+    if (!d) return '';
+    const opts = [['h1', 'עוד שעה'], ['h3', 'עוד 3 שעות'], ['tomorrow', 'מחר ב־20:00'], ['day2', 'מחרתיים ב־20:00']];
+    return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="בקשת הארכה">
+      <div class="hd"><h2>בקשת הארכה</h2>${close}</div>
+      <p class="quote">${esc(d.title)} — עכשיו עד ${fmtWhen(d.deadline)}</p>
+      <div class="field"><span class="lbl">עד מתי</span><div class="chips" style="grid-template-columns:repeat(2,minmax(0,1fr))">${opts.map(([k, l]) => `<button class="chip${s.when === k ? ' on' : ''}" data-act="extWhen" data-w="${k}">${l}</button>`).join('')}</div></div>
+      <div class="field"><label for="ex-reason">הסיבה (חובה)</label><textarea id="ex-reason" maxlength="300" placeholder="למה אתה צריך עוד זמן…"></textarea></div>
+      <button class="btn blood" data-act="doExt">לבקש מהמלכה</button>
+    </section></div>`;
+  }
   if (s.type === 'waitAsk') {
     return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="בקשת רשות">
       <div class="hd"><h2>בקשת רשות</h2>${close}</div>
@@ -1427,6 +1456,27 @@ app.addEventListener('click', async (e) => {
       const dl = S.draft.deadline ? new Date(S.draft.deadline).getTime() : null;
       const r = await api('/decrees', { method: 'POST', body: { title, note: S.draft.note, severity: S.draft.severity, deadline: Number.isFinite(dl) ? dl : null } });
       return act(r, 'הצו נחתם');
+    }
+    case 'extAsk': S.sheet = { type: 'extend', id, when: 'h3' }; return render();
+    case 'extWhen': { const t = document.getElementById('ex-reason')?.value || ''; S.sheet.when = el.dataset.w; render(); const x = document.getElementById('ex-reason'); if (x) x.value = t; return; }
+    case 'doExt': {
+      const reason = document.getElementById('ex-reason')?.value.trim();
+      if (!reason) return document.getElementById('ex-reason')?.focus();
+      const d = S.data.decrees.find((x) => x.id === S.sheet.id);
+      const base = Math.max(Date.now(), d.deadline || 0);
+      const n = new Date(); let until;
+      if (S.sheet.when === 'h1') until = base + 3600e3;
+      else if (S.sheet.when === 'h3') until = base + 3 * 3600e3;
+      else { n.setDate(n.getDate() + (S.sheet.when === 'day2' ? 2 : 1)); n.setHours(20, 0, 0, 0); until = Math.max(n.getTime(), base + 3600e3); }
+      el.disabled = true;
+      const r = await api(`/decrees/${S.sheet.id}/extend`, { method: 'POST', body: { until, reason } });
+      if (r.error) { S.sheet = null; return toast(r.error === 'already asked' ? 'כבר ביקשת.' : 'לא הצליח. נסה שוב.'); }
+      return act(r, 'הבקשה נשלחה למלכה');
+    }
+    case 'extYes': case 'extNo': {
+      const answer = document.getElementById(`ex-ans-${id}`)?.value || '';
+      const r = await api(`/decrees/${id}/${a === 'extYes' ? 'extend-yes' : 'extend-no'}`, { method: 'POST', body: { answer } });
+      return act(r, a === 'extYes' ? 'המועד הוזז' : 'נשלח לעבד');
     }
     case 'start': { el.disabled = true; const r = await api(`/decrees/${id}/start`, { method: 'POST' }); return act(r, 'בהצלחה. המלכה רואה שהתחלת.'); }
     case 'submit': S.sheet = { type: 'submit', id }; return render();

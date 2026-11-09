@@ -532,3 +532,27 @@ test('decree steps: waiting → doing → submitted; reject resets to waiting', 
   assert.equal(get(r).status, 'open');
   assert.equal(get(r).startedAt, null);
 });
+
+test('extension: slave asks with a reason, queen approves (deadline moves) or denies', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  const dl = Date.now() + 3600e3;
+  let r = await call('/api/decrees', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'לנקות מקרר', deadline: dl } });
+  const id = r.data.decrees.find((d) => d.title === 'לנקות מקרר').id;
+  const get = (res) => res.data.decrees.find((d) => d.id === id);
+  assert.equal((await call(`/api/decrees/${id}/extend`, { token: SLAVE, lulu: s, method: 'POST', body: { until: dl + 3600e3 } })).data.error, 'reason required');
+  assert.equal((await call(`/api/decrees/${id}/extend`, { token: SLAVE, lulu: s, method: 'POST', body: { until: dl - 1000, reason: 'x' } })).data.error, 'bad time');
+  r = await call(`/api/decrees/${id}/extend`, { token: SLAVE, lulu: s, method: 'POST', body: { until: dl + 3 * 3600e3, reason: 'אני בעבודה עד מאוחר' } });
+  assert.equal(get(r).extension.status, 'pending');
+  assert.equal((await call(`/api/decrees/${id}/extend`, { token: SLAVE, lulu: s, method: 'POST', body: { until: dl + 7200e3, reason: 'x' } })).data.error, 'already asked');
+  assert.equal((await call(`/api/decrees/${id}/extend-yes`, { token: SLAVE, lulu: s, method: 'POST' })).status, 403);
+  r = await call(`/api/decrees/${id}/extend-yes`, { token: QUEEN, lulu: q, method: 'POST', body: { answer: 'בסדר, הפעם' } });
+  assert.equal(get(r).deadline, Math.floor(dl + 3 * 3600e3));
+  assert.deepEqual([get(r).extension.status, get(r).extension.answer], ['approved', 'בסדר, הפעם']);
+  // Ask again, denied: deadline stays.
+  r = await call(`/api/decrees/${id}/extend`, { token: SLAVE, lulu: s, method: 'POST', body: { until: dl + 5 * 3600e3, reason: 'עוד קצת' } });
+  r = await call(`/api/decrees/${id}/extend-no`, { token: QUEEN, lulu: q, method: 'POST', body: { answer: 'לא' } });
+  assert.equal(get(r).deadline, Math.floor(dl + 3 * 3600e3));
+  assert.equal(get(r).extension.status, 'denied');
+});

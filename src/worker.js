@@ -147,7 +147,8 @@ async function ensureSchema(db) {
   const cols = (await db.prepare(`PRAGMA table_info(decrees)`).all()).results.map((c) => c.name);
   const add = [
     ['kind', `TEXT NOT NULL DEFAULT 'decree'`], ['deck', 'TEXT'], ['card_id', 'TEXT'],
-    ['notified_soon', 'INTEGER'], ['notified_late', 'INTEGER'], ['started_at', 'INTEGER']
+    ['notified_soon', 'INTEGER'], ['notified_late', 'INTEGER'], ['started_at', 'INTEGER'],
+    ['ext_status', 'TEXT'], ['ext_until', 'INTEGER'], ['ext_reason', 'TEXT'], ['ext_answer', 'TEXT']
   ].filter(([n]) => !cols.includes(n));
   if (add.length) await db.batch(add.map(([n, t]) => db.prepare(`ALTER TABLE decrees ADD COLUMN ${n} ${t}`)));
   schemaReady = true;
@@ -247,6 +248,7 @@ function decreeOut(d, now) {
     status: displayStatus(d, now), report: d.report, rejectReason: d.reject_reason,
     created: d.created, submittedAt: d.submitted_at, doneAt: d.done_at,
     remindedAt: d.reminded_at, pointsAwarded: d.points_awarded, startedAt: d.started_at || null,
+    extension: d.ext_status ? { status: d.ext_status, until: d.ext_until, reason: d.ext_reason || '', answer: d.ext_answer || '' } : null,
     kind: d.kind || 'decree', deck: d.deck || null
   };
 }
@@ -767,7 +769,7 @@ async function handleApi(request, env, ctx, role, url) {
   }
 
   // ----- decree actions -----
-  const m = path.match(/^\/decrees\/(\d+)(?:\/(start|submit|approve|reject|remind))?$/);
+  const m = path.match(/^\/decrees\/(\d+)(?:\/(start|submit|approve|reject|remind|extend|extend-yes|extend-no))?$/);
   if (m) {
     const id = Number(m[1]);
     const action = m[2];
@@ -782,6 +784,33 @@ async function handleApi(request, env, ctx, role, url) {
     }
     if (method !== 'POST') return err(405, 'method');
 
+    // ----- asking for more time -----
+    if (action === 'extend') {
+      if (role !== 'slave') return err(403, 'forbidden');
+      if (d.status !== 'open') return err(409, 'not open');
+      if (d.ext_status === 'pending') return err(409, 'already asked');
+      const until = Math.floor(Number(b.until));
+      const reason = cleanText(b.reason, 300);
+      if (!reason) return err(400, 'reason required');
+      if (!Number.isFinite(until) || until <= now || (d.deadline && until <= d.deadline) || until > now + 30 * 24 * 3600 * 1000) return err(400, 'bad time');
+      await env.DB.prepare(`UPDATE decrees SET ext_status = 'pending', ext_until = ?, ext_reason = ?, ext_answer = '' WHERE id = ?`)
+        .bind(until, reason, id).run();
+      push(['queen']);
+      return json(await listAll(env, role));
+    }
+    if (action === 'extend-yes' || action === 'extend-no') {
+      if (role !== 'queen') return err(403, 'forbidden');
+      if (d.ext_status !== 'pending') return err(409, 'nothing to answer');
+      const answer = cleanText(b.answer, 300);
+      if (action === 'extend-yes') {
+        await env.DB.prepare(`UPDATE decrees SET ext_status = 'approved', ext_answer = ?, deadline = ext_until,
+          notified_soon = NULL, notified_late = NULL WHERE id = ?`).bind(answer, id).run();
+      } else {
+        await env.DB.prepare(`UPDATE decrees SET ext_status = 'denied', ext_answer = ? WHERE id = ?`).bind(answer, id).run();
+      }
+      push(['slave']);
+      return json(await listAll(env, role));
+    }
     if (action === 'start') {
       if (role !== 'slave') return err(403, 'forbidden');
       if (d.status !== 'open') return err(409, 'not open');
