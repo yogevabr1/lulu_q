@@ -50,11 +50,12 @@ Write FOUR offer ideas. Rules you never break:
 Answer with JSON only, no other text:
 {"ideas":[{"title":"...","text":"...","severity":"command","needsHome":false}]}`;
 
-export async function generateIdeas(env, { vibe, deckLabel, lvl, wish, approved, refused, recent, homeFree, protocolLevel, mode }) {
+export async function generateIdeas(env, { vibe, deckLabel, lvl, wish, approved, refused, recent, homeFree, protocolLevel, mode, work }) {
   const user = [
     `VIBE: ${VIBES[vibe] || VIBES.playful}`,
     `INTENSITY: ${['', 'light', 'medium', 'strong'][lvl] || 'medium'}`,
-    deckLabel ? `TOPIC: ${deckLabel}` : 'TOPIC: any',
+    work ? `TOPIC: AT HIS WORKPLACE — things he does during his workday, away from her. Completely invisible to coworkers and nobody else involved: secret rules, timed messages or check-ins to her, small rituals, things he wears or carries under his clothes, posture or behaviour rules, thinking-of-her tasks, discreet anticipation for tonight. Nothing that could embarrass him or break workplace rules, no intimate photos at work, nothing sexual done at work itself. needsHome is false.`
+      : deckLabel ? `TOPIC: ${deckLabel}` : 'TOPIC: any',
     wish ? (mode === 'offer' ? `HE WANTS TO OFFER SOMETHING LIKE: ${wish}` : `THE QUEEN WANTS: ${wish}`) : '',
     `HOUSE FREE NOW: ${homeFree ? 'yes' : 'no — prefer ideas that are fine with the children around'}`,
     protocolLevel ? `TONIGHT'S PROTOCOL LEVEL: ${protocolLevel}/3` : '',
