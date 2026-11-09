@@ -136,6 +136,9 @@ async function ensureSchema(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS offers (
       id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending', created INTEGER NOT NULL, decided INTEGER)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS waits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+      answer TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, decided INTEGER)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS checkins (
       id INTEGER PRIMARY KEY AUTOINCREMENT, decree_id INTEGER NOT NULL, title TEXT NOT NULL,
       queen_score INTEGER, queen_note TEXT, slave_score INTEGER, slave_note TEXT, created INTEGER NOT NULL)`)
@@ -267,11 +270,28 @@ async function listAll(env, role) {
     offers: (await env.DB.prepare(
       `SELECT id, title, note, status, created, decided FROM offers WHERE status = 'pending' OR decided > ? ORDER BY id DESC LIMIT 20`
     ).bind(since).all()).results,
-    checkins: await checkinsFor(env.DB, role, since)
+    checkins: await checkinsFor(env.DB, role, since),
+    wait: await waitState(env.DB)
   };
 }
 
 // Each of you sees your own answer right away; the other's only once both answered.
+// The waiting counter: days since the queen last gave permission.
+async function waitState(db) {
+  const rows = (await db.prepare(`SELECT key, value FROM settings WHERE key IN ('waitSince', 'waitRecord')`).all()).results;
+  const m = Object.fromEntries(rows.map((r) => [r.key, Number(r.value) || null]));
+  const history = (await db.prepare('SELECT id, note, status, answer, created, decided FROM waits ORDER BY id DESC LIMIT 15').all()).results;
+  return { since: m.waitSince || null, record: m.waitRecord || 0, pending: history.find((h) => h.status === 'pending') || null, history };
+}
+
+// Ends the current wait at `now`: keeps the longest wait as the record.
+async function endWait(db, now) {
+  const w = await waitState(db);
+  const stmts = [setSetting(db, 'waitSince', now)];
+  if (w.since && now - w.since > w.record) stmts.push(setSetting(db, 'waitRecord', now - w.since));
+  return stmts;
+}
+
 async function checkinsFor(db, role, since) {
   if (!role) return [];
   const rows = (await db.prepare('SELECT * FROM checkins WHERE created > ? ORDER BY id DESC LIMIT 20').bind(since).all()).results;
@@ -480,6 +500,47 @@ async function handleApi(request, env, ctx, role, url) {
       .bind(xm[2] === 'approve' ? 'approved' : 'denied', now, rq.id)];
     if (xm[2] === 'approve') stmts.push(env.DB.prepare('INSERT INTO points (delta, reason, created) VALUES (?, ?, ?)')
       .bind(-rq.cost, 'הומר: ' + (REDEEM_ITEMS[rq.item]?.label || rq.item), now));
+    await env.DB.batch(stmts);
+    push(['slave']);
+    return json(await listAll(env, role));
+  }
+
+  // ----- waiting counter & asking permission -----
+  if (path === '/wait/start' && method === 'POST') {
+    // The slave can set the starting date once; after that only the queen changes it.
+    const b = await readBody(request);
+    const t = Math.floor(Number(b.since));
+    if (!Number.isFinite(t) || t > now || t < now - 3 * 365 * 24 * 3600 * 1000) return err(400, 'bad date');
+    const w = await waitState(env.DB);
+    if (role !== 'queen' && w.since) return err(403, 'forbidden');
+    await setSetting(env.DB, 'waitSince', t).run();
+    return json(await listAll(env, role));
+  }
+  if (path === '/wait/ask' && method === 'POST') {
+    if (role !== 'slave') return err(403, 'forbidden');
+    const w = await waitState(env.DB);
+    if (w.pending) return err(409, 'already asked');
+    const b = await readBody(request);
+    await env.DB.prepare('INSERT INTO waits (note, created) VALUES (?, ?)').bind(cleanText(b.note, 300), now).run();
+    push(['queen']);
+    return json(await listAll(env, role));
+  }
+  if (path === '/wait/release' && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    await env.DB.batch(await endWait(env.DB, now));
+    push(['slave']);
+    return json(await listAll(env, role));
+  }
+  const wm = path.match(/^\/wait\/(\d+)\/(yes|no|later)$/);
+  if (wm && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    const row = await env.DB.prepare('SELECT * FROM waits WHERE id = ?').bind(Number(wm[1])).first();
+    if (!row) return err(404, 'not found');
+    if (row.status !== 'pending') return err(409, 'already answered');
+    const b = await readBody(request);
+    const stmts = [env.DB.prepare('UPDATE waits SET status = ?, answer = ?, decided = ? WHERE id = ?')
+      .bind(wm[2], cleanText(b.answer, 300), now, row.id)];
+    if (wm[2] === 'yes') stmts.push(...(await endWait(env.DB, now)));
     await env.DB.batch(stmts);
     push(['slave']);
     return json(await listAll(env, role));

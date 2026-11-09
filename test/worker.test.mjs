@@ -427,3 +427,30 @@ test('ideas connection check', async () => {
   const r = await call('/api/ideas/check', { token: SLAVE, lulu: s, method: 'POST', envOverride: { ...env, ANTHROPIC_API_KEY: 'k' } });
   assert.deepEqual(r.data, { ok: true });
 });
+
+test('waiting counter: start once, ask, queen answers, yes resets and keeps the record', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  const month = Date.now() - 30 * 24 * 3600e3;
+  let r = await call('/api/wait/start', { token: SLAVE, lulu: s, method: 'POST', body: { since: month } });
+  assert.equal(r.data.wait.since, Math.floor(month));
+  assert.equal((await call('/api/wait/start', { token: SLAVE, lulu: s, method: 'POST', body: { since: Date.now() } })).status, 403);
+  assert.equal((await call('/api/wait/start', { token: SLAVE, lulu: s, method: 'POST', body: { since: Date.now() + 1e6 } })).status, 400);
+
+  assert.equal((await call('/api/wait/ask', { token: QUEEN, lulu: q, method: 'POST' })).status, 403);
+  r = await call('/api/wait/ask', { token: SLAVE, lulu: s, method: 'POST', body: { note: 'בבקשה' } });
+  const id = r.data.wait.pending.id;
+  assert.equal((await call('/api/wait/ask', { token: SLAVE, lulu: s, method: 'POST' })).data.error, 'already asked');
+  assert.equal((await call(`/api/wait/${id}/yes`, { token: SLAVE, lulu: s, method: 'POST' })).status, 403);
+
+  r = await call(`/api/wait/${id}/later`, { token: QUEEN, lulu: q, method: 'POST', body: { answer: 'עוד לא' } });
+  assert.equal(r.data.wait.pending, null);
+  assert.equal(r.data.wait.since, Math.floor(month)); // "later" doesn't reset
+  assert.equal(r.data.wait.history[0].answer, 'עוד לא');
+
+  r = await call('/api/wait/ask', { token: SLAVE, lulu: s, method: 'POST' });
+  r = await call(`/api/wait/${r.data.wait.pending.id}/yes`, { token: QUEEN, lulu: q, method: 'POST' });
+  assert.ok(Date.now() - r.data.wait.since < 5000);       // reset
+  assert.ok(r.data.wait.record >= 30 * 24 * 3600e3 - 5000); // the month became the record
+});

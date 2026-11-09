@@ -286,6 +286,7 @@ function queenDecrees() {
     </div>
     ${reviewBanner()}
     ${eveningPanel()}
+    ${waitCard(true)}
     ${summaryCard()}
     ${offerRequests(true)}
     ${checkinPrompts()}
@@ -314,6 +315,59 @@ function eveningPanel() {
         <button class="chip${st.protocol ? ' on' : ''}" data-act="protocol">${st.protocol ? 'כבי' : 'הפעילי'}</button>${lv}
       </div>
     </div>
+  </section>`;
+}
+
+// ---------- waiting counter ----------
+
+const DAY = 24 * 3600 * 1000;
+function isoDate(ms) { const d = new Date(ms); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+
+function waitCard(q) {
+  const w = S.data.wait;
+  if (!w) return '';
+  if (!w.since) {
+    if (!q) return `<section class="hero">
+      <span class="k">ימי המתנה</span>
+      <span class="when">מתי בערך הייתה הפעם האחרונה? אחרי שתקבע, רק המלכה יכולה לשנות.</span>
+      <div class="field"><label for="w-start" class="sr">תאריך</label><input id="w-start" type="date" max="${isoDate(Date.now())}" value="${isoDate(Date.now() - 30 * DAY)}"></div>
+      <button class="btn gold" data-act="waitStart">התחל לספור</button>
+    </section>`;
+    return `<section class="panel"><span class="lbl">ימי המתנה</span><span class="when">העבד עוד לא קבע מתי התחיל. את יכולה לקבוע:</span>
+      <div class="row2"><input id="w-start" type="date" max="${isoDate(Date.now())}" style="background:var(--bg);border:1px solid var(--line2);color:var(--text);min-height:44px;padding:8px;color-scheme:dark"><button class="btn gold" data-act="waitStart">קבעי</button></div></section>`;
+  }
+  const ms = S.data.now - w.since;
+  const days = Math.floor(ms / DAY), hours = Math.floor((ms % DAY) / 3600000);
+  const record = Math.floor(Math.max(w.record, ms) / DAY);
+  const last = w.history.find((h) => h.status !== 'pending');
+  const ans = { yes: 'כן', no: 'לא', later: 'אולי מחר' };
+  const top = `<div class="waitnum"><b>${days}</b><span>${days === 1 ? 'יום' : 'ימים'}${hours ? ` ו־${hours} ש׳` : ''}</span></div>
+    <span class="when">ימי המתנה · שיא: ${record}</span>`;
+  if (!q) {
+    return `<section class="hero" style="align-items:center;text-align:center">
+      ${top}
+      ${w.pending ? `<span class="st submitted">ביקשת רשות ${fmtWhen(w.pending.created)}. המלכה תחליט.</span>`
+        : `${last ? `<span class="when">התשובה האחרונה: <strong>${ans[last.status]}</strong>${last.answer ? ` — "${esc(last.answer)}"` : ''}</span>` : ''}
+           <button class="btn gold" data-act="waitAsk" style="width:100%">לבקש רשות</button>`}
+    </section>`;
+  }
+  return `<section class="hero" style="align-items:center;text-align:center">
+    <span class="k">העבד מחכה</span>
+    ${top}
+    ${w.pending ? `<div class="banner gold" style="flex-direction:column;align-items:stretch;text-align:right;width:100%">
+        <span><strong>העבד מבקש רשות.</strong>${w.pending.note ? ` "${esc(w.pending.note)}"` : ''}</span>
+        <input id="w-answer" maxlength="300" placeholder="מילה ממך (לא חובה)" style="background:var(--bg);border:1px solid var(--line2);color:var(--text);min-height:44px;padding:8px 12px;font-size:15px">
+        <div class="chips">
+          <button class="chip" data-act="waitAnswer" data-v="yes" data-id="${w.pending.id}">כן</button>
+          <button class="chip" data-act="waitAnswer" data-v="later" data-id="${w.pending.id}">אולי מחר</button>
+          <button class="chip" data-act="waitAnswer" data-v="no" data-id="${w.pending.id}">לא</button>
+        </div>
+      </div>` : ''}
+    <div class="row2" style="width:100%">
+      <button class="btn quiet" data-act="waitRelease">שחררי עכשיו</button>
+      <button class="btn quiet" data-act="waitFix">תיקון תאריך</button>
+    </div>
+    ${S.waitFix ? `<div class="row2" style="width:100%"><input id="w-start" type="date" max="${isoDate(Date.now())}" value="${isoDate(w.since)}" style="background:var(--bg);border:1px solid var(--line2);color:var(--text);min-height:44px;padding:8px;color-scheme:dark"><button class="btn gold" data-act="waitStart">שמרי</button></div>` : ''}
   </section>`;
 }
 
@@ -647,6 +701,7 @@ function slaveDecrees() {
     </div>
     ${reviewBanner()}
     ${slaveStatus()}
+    ${waitCard(false)}
     ${hero}${banners}${checkinPrompts()}${redeemRequests(false)}
     <div class="row2" style="grid-template-columns:2fr 1fr">
       <button class="btn" data-act="offer" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.crown}הצעת שירות למלכה</button>
@@ -895,6 +950,14 @@ function sheetView() {
   const close = `<button class="x" data-act="close" aria-label="סגירה">${icon.x}</button>`;
   if (s.type === 'pts') return customPointsSheet();
   if (s.type === 'tour') return tourSheet();
+  if (s.type === 'waitAsk') {
+    return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="בקשת רשות">
+      <div class="hd"><h2>בקשת רשות</h2>${close}</div>
+      <p class="when">המלכה תענה: כן, לא, או אולי מחר.</p>
+      <div class="field"><label for="w-note">משפט אליה (לא חובה)</label><textarea id="w-note" maxlength="300" placeholder="למה מגיע לך…"></textarea></div>
+      <button class="btn blood" data-act="doWaitAsk">לבקש</button>
+    </section></div>`;
+  }
   if (s.type === 'ideas') return ideasSheet(close);
   if (s.type === 'offer') {
     return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="הצעת שירות">
@@ -1192,6 +1255,32 @@ app.addEventListener('click', async (e) => {
       return render();
     }
     case 'ideaGo': return askIdeas();
+    case 'waitStart': {
+      const v = document.getElementById('w-start')?.value;
+      if (!v) return;
+      const [y, m, d] = v.split('-').map(Number);
+      const t = Math.min(new Date(y, m - 1, d, 12, 0).getTime(), Date.now());
+      const r = await api('/wait/start', { method: 'POST', body: { since: t } });
+      S.waitFix = false;
+      return act(r, 'נשמר');
+    }
+    case 'waitFix': S.waitFix = !S.waitFix; return render();
+    case 'waitAsk': S.sheet = { type: 'waitAsk' }; render(); return document.getElementById('w-note')?.focus();
+    case 'doWaitAsk': {
+      el.disabled = true;
+      const r = await api('/wait/ask', { method: 'POST', body: { note: document.getElementById('w-note')?.value || '' } });
+      if (r.error === 'already asked') { S.sheet = null; return toast('כבר ביקשת. המלכה תחליט.'); }
+      return act(r, 'הבקשה נשלחה למלכה');
+    }
+    case 'waitAnswer': {
+      const r = await api(`/wait/${id}/${el.dataset.v}`, { method: 'POST', body: { answer: document.getElementById('w-answer')?.value || '' } });
+      return act(r, el.dataset.v === 'yes' ? 'המונה אופס. העבד קיבל התראה.' : 'נשלח לעבד');
+    }
+    case 'waitRelease': {
+      if (!confirm('לאפס את המונה עכשיו?')) return;
+      const r = await api('/wait/release', { method: 'POST' });
+      return act(r, 'המונה אופס');
+    }
     case 'ideaOffer': {
       const x = S.ideas.list[Number(el.dataset.i)];
       S.sheet = { type: 'offer' }; render();
