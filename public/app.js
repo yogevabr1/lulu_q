@@ -540,7 +540,11 @@ async function askIdeas() {
   S.ideas.loading = true; S.ideas.error = ''; render();
   const r = await api('/ideas', { method: 'POST', body: { vibe: S.ideas.vibe, deck: S.ideas.deck || null, lvl: S.ideas.lvl, wish: S.ideas.wish } });
   S.ideas.loading = false;
-  if (r.ideas) S.ideas.list = r.ideas;
+  if (r.ideas) {
+    S.ideas.list = r.ideas;
+    if (!r.ideas.length) S.ideas.error = r.why === 'refused' ? 'Claude לא רצה להציע משהו לבקשה הזאת. נסו לנסח אחרת או להוריד עוצמה.'
+      : r.why === 'cut' ? 'התשובה נקטעה. נסו שוב.' : 'התשובה הגיעה בפורמט לא צפוי. נסו שוב.';
+  }
   else S.ideas.error = r.error === 'not configured' ? 'הרעיונות עוד לא מחוברים. צריך להוסיף מפתח ב־Cloudflare.'
     : r.error === 'daily limit' ? 'הגעתם למכסה היומית. מחר יש עוד.'
     : 'לא הצלחתי להביא רעיונות. נסו שוב.';

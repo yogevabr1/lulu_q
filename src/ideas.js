@@ -53,33 +53,53 @@ export async function generateIdeas(env, { vibe, deckLabel, lvl, wish, approved,
     `RECENT (don't repeat): ${recent.join(' | ') || '—'}`
   ].filter(Boolean).join('\n');
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: env.IDEAS_MODEL || 'claude-sonnet-5-5',
-      max_tokens: 1200,
-      system: mode === 'offer' ? OFFER_SYSTEM : SYSTEM,
-      messages: [{ role: 'user', content: user }]
-    })
-  });
-  if (!res.ok) {
-    console.error('ideas api', res.status, (await res.text()).slice(0, 300));
-    return { error: res.status === 401 ? 'bad key' : 'api error' };
+  let why = 'empty';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: env.IDEAS_MODEL || 'claude-sonnet-5-5',
+        max_tokens: 3000,
+        system: mode === 'offer' ? OFFER_SYSTEM : SYSTEM,
+        messages: [{ role: 'user', content: user + (attempt ? '\n\nReply with the JSON object only.' : '') }]
+      })
+    });
+    if (!res.ok) {
+      console.error('ideas api', res.status, (await res.text()).slice(0, 300));
+      return { error: res.status === 401 ? 'bad key' : 'api error' };
+    }
+    const body = await res.json();
+    const text = (body.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+    const ideas = parseIdeas(text);
+    if (ideas.length) return { ideas };
+    why = body.stop_reason === 'refusal' ? 'refused' : body.stop_reason === 'max_tokens' ? 'cut' : 'format';
+    console.error('ideas empty', body.stop_reason, text.slice(0, 500));
   }
-  const body = await res.json();
-  const text = (body.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
-  return { ideas: parseIdeas(text) };
+  return { ideas: [], why };
+}
+
+function rawIdeas(text) {
+  try {
+    const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+    if (Array.isArray(json.ideas)) return json.ideas;
+    if (Array.isArray(json)) return json;
+  } catch {}
+  // Cut off or wrapped: keep every complete {...} that has a title.
+  const out = [];
+  for (const m of text.matchAll(/\{[^{}]*"title"[^{}]*\}/g)) {
+    try { out.push(JSON.parse(m[0])); } catch {}
+  }
+  return out;
 }
 
 export function parseIdeas(text) {
   try {
-    const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
-    return (json.ideas || []).slice(0, 6).map((x) => ({
+    return rawIdeas(text || '').slice(0, 6).map((x) => ({
       title: cleanText(x.title, 80),
       text: cleanText(x.text, 400),
       severity: SEVERITIES.includes(x.severity) ? x.severity : 'command',

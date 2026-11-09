@@ -589,7 +589,7 @@ async function handleApi(request, env, ctx, role, url) {
       mode: role === 'slave' ? 'offer' : 'task'
     });
     if (out.error) return err(502, out.error);
-    return json({ ideas: out.ideas, left: 39 - used });
+    return json({ ideas: out.ideas, why: out.why || null, left: 39 - used });
   }
 
   // ----- cards -----
