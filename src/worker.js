@@ -186,6 +186,22 @@ function safeEqual(a, b) {
 
 // ---------- cards ----------
 
+// Expectation review: each of you marks every card. Until BOTH have finished,
+// neither sees the other's marks, so nobody answers to please the other.
+async function reviewState(db) {
+  const rows = (await db.prepare(`SELECT key, value FROM settings WHERE key IN ('reviewDone_queen', 'reviewDone_slave')`).all()).results;
+  const m = Object.fromEntries(rows.map((r) => [r.key, Number(r.value) || null]));
+  return { queen: m.reviewDone_queen || null, slave: m.reviewDone_slave || null };
+}
+
+async function cardsPayload(db, role) {
+  const review = await reviewState(db);
+  const both = !!(review.queen && review.slave);
+  const theirs = role === 'queen' ? 'slave' : 'queen';
+  const cards = (await allCards(db)).map((c) => (both ? c : { ...c, votes: { ...c.votes, [theirs]: null }, theirsHidden: true }));
+  return { decks: DECKS, cards, settings: await getSettings(db), review };
+}
+
 async function allCards(db) {
   const votes = (await db.prepare('SELECT card_id, role, ok FROM card_votes').all()).results;
   const vmap = {};
@@ -533,9 +549,16 @@ async function handleApi(request, env, ctx, role, url) {
     return json(await listAll(env, role));
   }
 
+  // ----- expectation review -----
+  if (path === '/review/done' && method === 'POST') {
+    await setSetting(env.DB, 'reviewDone_' + role, now).run();
+    push([other(role)]);
+    return json(await cardsPayload(env.DB, role));
+  }
+
   // ----- cards -----
   if (path === '/cards' && method === 'GET') {
-    return json({ decks: DECKS, cards: await allCards(env.DB), settings: await getSettings(env.DB) });
+    return json(await cardsPayload(env.DB, role));
   }
   if (path === '/cards' && method === 'POST') {
     if (role !== 'queen') return err(403, 'forbidden');
@@ -548,7 +571,7 @@ async function handleApi(request, env, ctx, role, url) {
     await env.DB.prepare('INSERT INTO custom_cards (deck, lvl, title, text, created) VALUES (?, ?, ?, ?, ?)')
       .bind(deck, lvl, title, text, now).run();
     push(['slave']);
-    return json({ decks: DECKS, cards: await allCards(env.DB), settings: await getSettings(env.DB) });
+    return json(await cardsPayload(env.DB, role));
   }
   const cm = path.match(/^\/cards\/([a-z]{2}\d{1,6})(?:\/(vote|send))?$/);
   if (cm) {
@@ -564,7 +587,7 @@ async function handleApi(request, env, ctx, role, url) {
         env.DB.prepare('DELETE FROM custom_cards WHERE id = ?').bind(Number(cardId.slice(2))),
         env.DB.prepare('DELETE FROM card_votes WHERE card_id = ?').bind(cardId)
       ]);
-      return json({ decks: DECKS, cards: await allCards(env.DB), settings: await getSettings(env.DB) });
+      return json(await cardsPayload(env.DB, role));
     }
     if (method !== 'POST') return err(405, 'method');
 
@@ -577,7 +600,7 @@ async function handleApi(request, env, ctx, role, url) {
           ON CONFLICT(card_id, role) DO UPDATE SET ok = excluded.ok, updated = excluded.updated`)
           .bind(cardId, role, b.ok ? 1 : 0, now).run();
       }
-      return json({ decks: DECKS, cards: await allCards(env.DB), settings: await getSettings(env.DB) });
+      return json(await cardsPayload(env.DB, role));
     }
     if (action === 'send') {
       if (role !== 'queen') return err(403, 'forbidden');

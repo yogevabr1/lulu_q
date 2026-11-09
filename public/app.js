@@ -174,6 +174,7 @@ async function enterCourt() {
   let seen = true;
   try { seen = localStorage.getItem('lulu_tour_' + S.me.role) === '1'; } catch {}
   if (!seen && S.data) { S.sheet = { type: 'tour', i: 0 }; render(); }
+  loadCards();
 }
 
 async function refresh() {
@@ -185,6 +186,7 @@ async function refresh() {
 function render() {
   if (!S.token) return renderLock();
   if (!S.data) return;
+  if (S.review) return renderReview();
   const q = S.me.role === 'queen';
   const st = S.data.settings || {};
   const body = S.tab === 'points' ? pointsView(q)
@@ -282,6 +284,7 @@ function queenDecrees() {
       <div class="stat gold"><b>${c('submitted')}</b><span>לאישורך</span></div>
       <div class="stat red"><b>${c('overdue')}</b><span>באיחור</span></div>
     </div>
+    ${reviewBanner()}
     ${eveningPanel()}
     ${summaryCard()}
     ${offerRequests(true)}
@@ -369,6 +372,129 @@ function checkinResults() {
   </div>`).join('');
 }
 
+// ---------- expectation review: every card, one at a time ----------
+
+function reviewList() {
+  if (!S.cards) return [];
+  return [...S.cards.cards].sort((a, b) => DECK_ORDER.indexOf(a.deck) - DECK_ORDER.indexOf(b.deck) || a.lvl - b.lvl);
+}
+
+function reviewProgress() {
+  const list = reviewList();
+  const done = list.filter((c) => c.votes[S.me.role] === 0 || c.votes[S.me.role] === 1).length;
+  return { done, total: list.length };
+}
+
+function reviewBanner() {
+  if (!S.cards || S.cards.review?.[S.me.role]) return '';
+  const { done, total } = reviewProgress();
+  const q = S.me.role === 'queen';
+  return `<section class="hero">
+    <span class="k">תיאום ציפיות</span>
+    <h2 style="font-size:20px">${done ? `סימנת ${done} מתוך ${total} קלפים` : `${total} קלפים מחכים לך`}</h2>
+    <span class="when">עוברים על כל קלף ומסמנים ✓ רוצה או ✗ לא. ${q ? 'העבד' : 'המלכה'} לא רואה את הסימונים שלך עד ששניכם מסיימים.</span>
+    <button class="btn gold" data-act="reviewStart">${done ? 'להמשיך' : 'להתחיל'}</button>
+  </section>`;
+}
+
+async function startReview() {
+  if (!S.cards) await loadCards();
+  const list = reviewList();
+  let i = list.findIndex((c) => c.votes[S.me.role] !== 0 && c.votes[S.me.role] !== 1);
+  if (i < 0) i = list.length; // everything marked: go straight to the finish screen
+  S.review = { i };
+  window.scrollTo(0, 0);
+  render();
+}
+
+async function reviewVote(ok) {
+  const list = reviewList();
+  const c = list[S.review.i];
+  if (!c) return;
+  // Optimistic: move on at once, save in the background.
+  c.votes[S.me.role] = ok ? 1 : 0;
+  S.review.i++;
+  render();
+  const r = await api(`/cards/${c.id}/vote`, { method: 'POST', body: { ok } });
+  if (r.error) { c.votes[S.me.role] = null; S.review.i = list.indexOf(c); toast('לא נשמר. נסו שוב.'); }
+}
+
+async function finishReview() {
+  const r = await api('/review/done', { method: 'POST' });
+  if (r.error) return toast('לא נשמר. נסו שוב.');
+  S.cards = r; S.review = null; S.tab = 'limits';
+  window.scrollTo(0, 0);
+  toast('סיימת');
+}
+
+function renderReview() {
+  const list = reviewList();
+  const i = S.review.i;
+  const total = list.length;
+  const pct = Math.round((Math.min(i, total) / total) * 100);
+  let body;
+  if (i >= total) {
+    const yes = list.filter((c) => c.votes[S.me.role] === 1).length;
+    body = `<div class="bigcard"><div class="mid">
+        <div class="mono big"><span>R</span></div>
+        <h2>סיימת את כל הקלפים</h2>
+        <p>${yes} ✓ · ${total - yes} ✗</p>
+        <p>אחרי ששניכם תסיימו, תראו יחד על מה הסכמתם ועל מה כדאי לדבר.</p>
+      </div></div>
+      <div class="row2"><button class="btn quiet" data-act="rvBack">לחזור לקלף האחרון</button><button class="btn gold" data-act="rvFinish">סיום</button></div>`;
+  } else {
+    const c = list[i];
+    const mine = c.votes[S.me.role];
+    const gated = S.cards.decks[c.deck]?.gated || c.needsHome;
+    body = `<div class="bigcard${gated ? ' red' : ''}">
+        <div class="top2"><span>${DECK_LABEL[c.deck] || ''} · ${dots(c.lvl)}</span><span class="glyph">R</span></div>
+        <div class="mid"><h2>${esc(c.title)}</h2><p>${esc(c.text)}</p></div>
+        ${c.green ? '<p class="fine">קלף רגיש: ייפתח רק אם שניכם מסמנים ✓</p>' : gated ? '<p class="fine">רק כשהבית פנוי</p>' : ''}
+      </div>
+      <div class="row2 rv">
+        <button class="btn rvno${mine === 0 ? ' on' : ''}" data-act="rvNo">✗ לא</button>
+        <button class="btn rvyes${mine === 1 ? ' on' : ''}" data-act="rvYes">✓ רוצה</button>
+      </div>
+      <div class="row2">
+        <button class="btn quiet" data-act="rvBack" ${i === 0 ? 'disabled' : ''}>הקודם</button>
+        <button class="btn quiet" data-act="rvExit">להמשיך אחר כך</button>
+      </div>`;
+  }
+  app.innerHTML = `<div class="shell"><header class="top">
+      <div class="brand"><div class="mono"><span>R</span></div><div><div class="kicker">תיאום ציפיות</div><h1 class="title">${Math.min(i + 1, total)} / ${total}</h1></div></div>
+      <button class="btn quiet" data-act="rvExit" aria-label="יציאה" style="min-width:44px;padding:8px 10px">${icon.x}</button>
+    </header>
+    <div class="rvbar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
+    <main class="main" style="padding-bottom:calc(32px + env(safe-area-inset-bottom))">${body}</main></div>
+    ${S.toast ? `<div class="toast" role="status">${esc(S.toast)}</div>` : ''}`;
+}
+
+function reviewResults() {
+  if (!S.cards) return '';
+  const rv = S.cards.review || {};
+  const me = S.me.role, them = me === 'queen' ? 'slave' : 'queen';
+  const themName = me === 'queen' ? 'העבד' : 'המלכה';
+  if (!rv[me]) return '';
+  if (!rv[them]) return `<div class="banner gold"><span><strong>תיאום ציפיות:</strong> סיימת. מחכים ל${themName === 'העבד' ? 'עבד' : 'מלכה'} — אז תראו יחד את התוצאות.</span></div>`;
+  const list = reviewList();
+  const both = list.filter((c) => c.votes.queen === 1 && c.votes.slave === 1);
+  const none = list.filter((c) => c.votes.queen === 0 && c.votes.slave === 0);
+  const split = list.filter((c) => (c.votes.queen === 1 && c.votes.slave === 0) || (c.votes.queen === 0 && c.votes.slave === 1));
+  const who = (c) => (c.votes.queen === 1 ? 'המלכה רוצה, העבד לא' : 'העבד רוצה, המלכה לא');
+  return `<section class="hero">
+    <span class="k">תיאום ציפיות</span>
+    <div class="stats">
+      <div class="stat gold"><b>${both.length}</b><span>שניכם ✓</span></div>
+      <div class="stat${split.length ? ' red' : ''}"><b>${split.length}</b><span>לדבר עליהם</span></div>
+      <div class="stat"><b>${none.length}</b><span>שניכם ✗</span></div>
+    </div>
+    <span class="when">קלף שאחד מכם סימן ✗ לא נשלף. אפשר לשנות סימון בכל רגע ברשימה למטה.</span>
+  </section>
+  ${split.length ? `<div class="sec"><h2>על מה לדבר</h2><span>${split.length} קלפים</span></div>
+    ${split.map((c) => `<div class="limrow off"><div class="lt"><span class="t">${esc(c.title)}</span><span class="d">${DECK_LABEL[c.deck]} · ${dots(c.lvl)}</span></div><p>${esc(c.text)}</p><p><strong style="color:var(--rose)">${who(c)}</strong></p></div>`).join('')}` : ''}
+  <button class="btn quiet" data-act="reviewStart">לעבור שוב על הקלפים</button>`;
+}
+
 // ---------- the guide ("how it works"), different for each of you ----------
 
 const TOUR = {
@@ -380,7 +506,8 @@ const TOUR = {
     ['נקודות', ['העבד צובר על צווים שבוצעו, ומפסיד על הפרות. במסך "נקודות" יש כפתורים מהירים: בונוס, פנייה שגויה, ויכוח.', 'כשהעבד מבקש להמיר נקודות — הבקשה מופיעה אצלך. את מחליטה.']],
     ['מצב הערב', ['למעלה במסך הצווים: מצב המלכה (זמינה, לא להפריע, מחכה לך) ומתג הפרוטוקול עם עוצמה לערב.', 'העבד יכול להציע שירות ביוזמתו — את הופכת לצו או מוותרת.']],
     ['גבולות וצ\'ק־אין', ['במסך "חוקים" כל אחד מכם יכול לפסול כל קלף. קלף שאחד פוסל — לא נשלף. קלפים מסומנים "ירוק" נעולים עד ששניכם מאשרים.', 'אחרי כל קלף ◆◆◆ שניכם מקבלים צ\'ק־אין קצר. אף אחד לא רואה את התשובה של השני עד ששניכם עניתם.']],
-    ['ביטחון', ['⏸ למעלה — הפוגה: עוצר הכול, לשניכם, בכל רגע. 🔒 — נעילה מיידית. אחרי 5 דקות ברקע האפליקציה ננעלת לבד.', 'ההתראות תמיד ניטרליות: "יש עדכון חדש". מפעילים אותן במסך "חוקים".']]
+    ['ביטחון', ['⏸ למעלה — הפוגה: עוצר הכול, לשניכם, בכל רגע. 🔒 — נעילה מיידית. אחרי 5 דקות ברקע האפליקציה ננעלת לבד.', 'ההתראות תמיד ניטרליות: "יש עדכון חדש". מפעילים אותן במסך "חוקים".']],
+    ['ועכשיו: תיאום ציפיות', ['לפני שמתחילים, כל אחד מכם עובר על כל הקלפים ומסמן ✓ או ✗.', 'אף אחד לא רואה את הסימונים של השני עד ששניכם מסיימים — ואז תראו יחד על מה הסכמתם ועל מה כדאי לדבר. הכפתור מחכה במסך הצווים.']]
   ],
   slave: [
     ['יומן העבד', ['כאן אתה רואה מה המלכה גזרה, ועד מתי. אתה מבצע ומגיש — רק היא מאשרת.', 'זה כלי עזר למשחק שלכם, לא המשחק עצמו.']],
@@ -389,7 +516,8 @@ const TOUR = {
     ['נקודות', ['בקשה 5, פקודה 10, צו מלכותי 20 — וחצי באיחור. הפרות מורידות.', 'במסך "נקודות" אפשר לבקש להמיר. המלכה רשאית לסרב.']],
     ['מצב המלכה והצעת שירות', ['למעלה תראה את מצב המלכה, ומתי הפרוטוקול פעיל — אז פונים רק "המלכה".', '"הצעת שירות" — אתה מציע משהו ביוזמתך, והיא מחליטה אם זה הופך לצו.']],
     ['גבולות וצ\'ק־אין', ['במסך "חוקים" אתה יכול לפסול כל קלף, בלי להסביר. קלפים מסומנים "ירוק" נעולים עד ששניכם מאשרים.', 'אחרי כל קלף ◆◆◆ — צ\'ק־אין קצר ופרטי. התשובות נחשפות רק כששניכם עניתם.']],
-    ['ביטחון', ['⏸ למעלה — הפוגה: עוצר הכול, בכל רגע, בלי עונש. 🔒 — נעילה מיידית.', 'ההתראות תמיד ניטרליות. מפעילים אותן במסך "חוקים".']]
+    ['ביטחון', ['⏸ למעלה — הפוגה: עוצר הכול, בכל רגע, בלי עונש. 🔒 — נעילה מיידית.', 'ההתראות תמיד ניטרליות. מפעילים אותן במסך "חוקים".']],
+    ['ועכשיו: תיאום ציפיות', ['לפני שמתחילים, כל אחד מכם עובר על כל הקלפים ומסמן ✓ או ✗ — בכנות.', 'המלכה לא רואה את הסימונים שלך עד ששניכם מסיימים. אז תראו יחד על מה הסכמתם ועל מה כדאי לדבר. הכפתור מחכה במסך הצווים.']]
   ]
 };
 
@@ -461,6 +589,7 @@ function slaveDecrees() {
       <div class="stat gold"><b>${points.total}</b><span>נקודות צייתנות</span></div>
       <div class="stat${overdue.length ? ' red' : ''}"><b>${open.length}</b><span>לביצוע</span></div>
     </div>
+    ${reviewBanner()}
     ${slaveStatus()}
     ${hero}${banners}${checkinPrompts()}${redeemRequests(false)}
     <button class="btn" data-act="offer" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.crown}הצעת שירות למלכה</button>
@@ -616,7 +745,7 @@ function limitsView(q) {
             <button class="vote${mine === 1 ? ' yes' : ''}" data-act="vote" data-card="${c.id}" data-v="1" aria-pressed="${mine === 1}">✓ מאשר</button>
             <button class="vote${mine === 0 ? ' no' : ''}" data-act="vote" data-card="${c.id}" data-v="0" aria-pressed="${mine === 0}">✗ פוסל</button>
           </div>
-          <span class="them">${themName}: ${voteLabel(theirs, c.green)}</span>
+          <span class="them">${themName}: ${c.theirsHidden ? '<b class="wait">יוצג כששניכם תסיימו</b>' : voteLabel(theirs, c.green)}</span>
         </div>
         ${q && c.custom ? `<button class="link" data-act="delCard" data-card="${c.id}">מחיקת הקלף</button>` : ''}
       </div>`;
@@ -629,6 +758,7 @@ function limitsView(q) {
       <span class="when">${pushTxt}</span>
       ${S.pushState === 'on' ? '<button class="btn quiet" data-act="pushTest">שליחת התראת בדיקה</button>' : S.pushState === 'denied' || S.pushState === 'unsupported' ? '' : '<button class="btn gold" data-act="pushOn">הפעלת התראות</button>'}
     </section>
+    ${reviewResults()}
     <button class="btn" data-act="tour">איך האפליקציה עובדת?</button>
     <div class="sec"><h2>צ'ק־אינים</h2><span>אחרי כל ◆◆◆</span></div>
     ${checkinResults()}
@@ -984,6 +1114,11 @@ app.addEventListener('click', async (e) => {
     case 'tourNext': S.sheet.i++; return render();
     case 'tourBack': S.sheet.i = Math.max(0, S.sheet.i - 1); return render();
     case 'tourDone': try { localStorage.setItem('lulu_tour_' + S.me.role, '1'); } catch {} S.sheet = null; return render();
+    case 'reviewStart': return startReview();
+    case 'rvYes': case 'rvNo': return reviewVote(a === 'rvYes');
+    case 'rvBack': S.review.i = Math.max(0, S.review.i - 1); return render();
+    case 'rvExit': S.review = null; window.scrollTo(0, 0); return render();
+    case 'rvFinish': return finishReview();
     case 'pushTest': await api('/push/test', { method: 'POST' }); return toast('נשלחה התראת בדיקה');
     case 'backdrop': case 'close': S.sheet = null; return render();
     case 'new':

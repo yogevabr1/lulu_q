@@ -365,3 +365,28 @@ test('offers, quick punishment, check-ins, mood, protocol, weekly summary', asyn
   r = await call('/api/settings', { token: QUEEN, lulu: q, method: 'POST', body: { dismissSummary: true } });
   assert.equal(r.data.settings.summary.dismissed, true);
 });
+
+test('expectation review: partner marks stay hidden until both finish', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  await call('/api/cards/se01/vote', { token: QUEEN, lulu: q, method: 'POST', body: { ok: true } });
+  await call('/api/cards/se01/vote', { token: SLAVE, lulu: s, method: 'POST', body: { ok: false } });
+
+  let r = await call('/api/cards', { token: SLAVE, lulu: s });
+  let c = r.data.cards.find((x) => x.id === 'se01');
+  assert.equal(c.votes.slave, 0);
+  assert.equal(c.votes.queen, null);
+  assert.equal(c.theirsHidden, true);
+
+  r = await call('/api/review/done', { token: SLAVE, lulu: s, method: 'POST' });
+  assert.ok(r.data.review.slave);
+  assert.equal(r.data.cards.find((x) => x.id === 'se01').votes.queen, null); // still hidden
+
+  r = await call('/api/review/done', { token: QUEEN, lulu: q, method: 'POST' });
+  c = r.data.cards.find((x) => x.id === 'se01');
+  assert.deepEqual(c.votes, { queen: 1, slave: 0 });
+  assert.equal(c.enabled, false);
+  assert.ok(!c.theirsHidden);
+  assert.ok(r.data.cards.length >= 174);
+});
