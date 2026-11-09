@@ -517,7 +517,7 @@ function ideasSheet(close) {
   if (I.loading) results = '<p class="empty">חושבת על רעיונות…</p>';
   else if (I.error) results = `<div class="banner"><span>${esc(I.error)}</span></div>`;
   else if (I.list) results = I.list.length ? I.list.map((x, i) => `<div class="card ${x.severity === 'royal' ? 'overdue' : ''}">
-      <div class="meta"><span class="sev ${x.severity}">${SEV[x.severity]}</span>${x.needsHome ? '<span class="st">רק כשהבית פנוי</span>' : ''}</div>
+      <div class="meta">${q ? `<span class="sev ${x.severity}">${SEV[x.severity]}</span>` : `<span class="sev ${x.severity}">${'◆'.repeat(x.severity === 'royal' ? 3 : x.severity === 'command' ? 2 : 1)}</span>`}${x.needsHome ? '<span class="st">רק כשהבית פנוי</span>' : ''}</div>
       <h3>${esc(x.title)}</h3><p class="when" style="margin:0">${esc(x.text)}</p>
       ${q ? `<div class="row2"><button class="btn gold" data-act="ideaUse" data-i="${i}">גזרי</button><button class="btn quiet" data-act="ideaCard" data-i="${i}">לקלפים</button></div>`
           : `<button class="btn gold" data-act="ideaOffer" data-i="${i}">להציע למלכה</button>`}
