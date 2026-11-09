@@ -1028,11 +1028,11 @@ function sheetView() {
   if (s.type === 'extend') {
     const d = S.data.decrees.find((x) => x.id === s.id);
     if (!d) return '';
-    const opts = [['h1', 'עוד שעה'], ['h3', 'עוד 3 שעות'], ['tomorrow', 'מחר ב־20:00'], ['day2', 'מחרתיים ב־20:00']];
+    const opts = [['m20', '20 דק׳'], ['m40', '40 דק׳'], ['h1', 'שעה'], ['h3', '3 שעות'], ['tomorrow', 'מחר 20:00'], ['day2', 'מחרתיים 20:00']];
     return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="בקשת הארכה">
       <div class="hd"><h2>בקשת הארכה</h2>${close}</div>
       <p class="quote">${esc(d.title)} — עכשיו עד ${fmtWhen(d.deadline)}</p>
-      <div class="field"><span class="lbl">עד מתי</span><div class="chips" style="grid-template-columns:repeat(2,minmax(0,1fr))">${opts.map(([k, l]) => `<button class="chip${s.when === k ? ' on' : ''}" data-act="extWhen" data-w="${k}">${l}</button>`).join('')}</div></div>
+      <div class="field"><span class="lbl">כמה זמן נוסף</span><div class="chips" style="grid-template-columns:repeat(3,minmax(0,1fr))">${opts.map(([k, l]) => `<button class="chip${s.when === k ? ' on' : ''}" data-act="extWhen" data-w="${k}">${l}</button>`).join('')}</div></div>
       <div class="field"><label for="ex-reason">הסיבה (חובה)</label><textarea id="ex-reason" maxlength="300" placeholder="למה אתה צריך עוד זמן…"></textarea></div>
       <button class="btn blood" data-act="doExt">לבקש מהמלכה</button>
     </section></div>`;
@@ -1457,7 +1457,7 @@ app.addEventListener('click', async (e) => {
       const r = await api('/decrees', { method: 'POST', body: { title, note: S.draft.note, severity: S.draft.severity, deadline: Number.isFinite(dl) ? dl : null } });
       return act(r, 'הצו נחתם');
     }
-    case 'extAsk': S.sheet = { type: 'extend', id, when: 'h3' }; return render();
+    case 'extAsk': S.sheet = { type: 'extend', id, when: 'm20' }; return render();
     case 'extWhen': { const t = document.getElementById('ex-reason')?.value || ''; S.sheet.when = el.dataset.w; render(); const x = document.getElementById('ex-reason'); if (x) x.value = t; return; }
     case 'doExt': {
       const reason = document.getElementById('ex-reason')?.value.trim();
@@ -1465,9 +1465,11 @@ app.addEventListener('click', async (e) => {
       const d = S.data.decrees.find((x) => x.id === S.sheet.id);
       const base = Math.max(Date.now(), d.deadline || 0);
       const n = new Date(); let until;
-      if (S.sheet.when === 'h1') until = base + 3600e3;
+      if (S.sheet.when === 'm20') until = base + 20 * 60e3;
+      else if (S.sheet.when === 'm40') until = base + 40 * 60e3;
+      else if (S.sheet.when === 'h1') until = base + 3600e3;
       else if (S.sheet.when === 'h3') until = base + 3 * 3600e3;
-      else { n.setDate(n.getDate() + (S.sheet.when === 'day2' ? 2 : 1)); n.setHours(20, 0, 0, 0); until = Math.max(n.getTime(), base + 3600e3); }
+      else { n.setDate(n.getDate() + (S.sheet.when === 'day2' ? 2 : 1)); n.setHours(20, 0, 0, 0); until = Math.max(n.getTime(), base + 20 * 60e3); }
       el.disabled = true;
       const r = await api(`/decrees/${S.sheet.id}/extend`, { method: 'POST', body: { until, reason } });
       if (r.error) { S.sheet = null; return toast(r.error === 'already asked' ? 'כבר ביקשת.' : 'לא הצליח. נסה שוב.'); }
