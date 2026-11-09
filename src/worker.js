@@ -155,7 +155,8 @@ async function ensureSchema(db) {
 
 async function getSettings(db) {
   const rows = (await db.prepare(
-    `SELECT key, value FROM settings WHERE key IN ('homeFree', 'paused', 'pausedBy', 'mood', 'protocol', 'protocolLevel', 'protocolSince', 'summary')`
+    `SELECT key, value FROM settings WHERE key IN ('homeFree', 'paused', 'pausedBy', 'mood', 'protocol', 'protocolLevel', 'protocolSince', 'summary',
+      'statusText', 'statusAt', 'statusReqAt', 'statusReqDue', 'statusReqLate')`
   ).all()).results;
   const m = Object.fromEntries(rows.map((r) => [r.key, r.value]));
   let summary = null;
@@ -164,7 +165,11 @@ async function getSettings(db) {
     homeFree: m.homeFree === '1', paused: m.paused === '1', pausedBy: m.pausedBy || null,
     mood: MOODS[m.mood] ? m.mood : 'free',
     protocol: m.protocol === '1', protocolLevel: Number(m.protocolLevel) || 2, protocolSince: Number(m.protocolSince) || null,
-    summary
+    summary,
+    status: {
+      text: m.statusText || '', at: Number(m.statusAt) || null,
+      demandAt: Number(m.statusReqAt) || null, demandDue: Number(m.statusReqDue) || null, lateNotified: m.statusReqLate === '1'
+    }
   };
 }
 const setSetting = (db, key, value) => db.prepare(
@@ -505,6 +510,40 @@ async function handleApi(request, env, ctx, role, url) {
     return json(await listAll(env, role));
   }
 
+  // ----- "what I'm doing now": the slave reports, the queen can demand an update -----
+  if (path === '/status' && method === 'POST') {
+    if (role !== 'slave') return err(403, 'forbidden');
+    const b = await readBody(request);
+    const text = cleanText(b.text, 160);
+    if (!text) return err(400, 'text required');
+    const st = (await getSettings(env.DB)).status;
+    const stmts = [setSetting(env.DB, 'statusText', text), setSetting(env.DB, 'statusAt', now)];
+    if (st.demandAt) {
+      stmts.push(setSetting(env.DB, 'statusReqAt', ''), setSetting(env.DB, 'statusReqDue', ''), setSetting(env.DB, 'statusReqLate', '0'));
+      if (st.demandDue && now > st.demandDue) {
+        stmts.push(env.DB.prepare('INSERT INTO points (delta, reason, created) VALUES (?, ?, ?)').bind(-5, 'עדכון סטטוס באיחור', now));
+      }
+    }
+    await env.DB.batch(stmts);
+    push(['queen']);
+    return json(await listAll(env, role));
+  }
+  if (path === '/status/demand' && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    const b = await readBody(request);
+    const minutes = [5, 10, 15, 30].includes(b.minutes) ? b.minutes : 10;
+    await env.DB.batch([
+      setSetting(env.DB, 'statusReqAt', now), setSetting(env.DB, 'statusReqDue', now + minutes * 60000), setSetting(env.DB, 'statusReqLate', '0')
+    ]);
+    push(['slave']);
+    return json(await listAll(env, role));
+  }
+  if (path === '/status/cancel' && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    await env.DB.batch([setSetting(env.DB, 'statusReqAt', ''), setSetting(env.DB, 'statusReqDue', ''), setSetting(env.DB, 'statusReqLate', '0')]);
+    return json(await listAll(env, role));
+  }
+
   // ----- waiting counter & asking permission -----
   if (path === '/wait/start' && method === 'POST') {
     // The slave can set the starting date once; after that only the queen changes it.
@@ -806,6 +845,11 @@ export async function runSchedule(env) {
   const subject0 = env.VAPID_SUBJECT || 'mailto:noreply@example.com';
   if (await weeklySummary(env, now)) await notify(env, ['queen'], subject0);
   const settings = await getSettings(env.DB);
+  const st = settings.status;
+  if (st.demandDue && now > st.demandDue && !st.lateNotified) {
+    await setSetting(env.DB, 'statusReqLate', '1').run();
+    await notify(env, ['queen', 'slave'], subject0);
+  }
   if (settings.paused) return;
   const soon = await env.DB.prepare(
     `SELECT id FROM decrees WHERE status = 'open' AND deadline IS NOT NULL AND deadline > ? AND deadline <= ? AND notified_soon IS NULL`

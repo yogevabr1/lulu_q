@@ -185,6 +185,7 @@ async function refresh() {
 
 function render() {
   if (!S.token) return renderLock();
+  queueMicrotask(tickTimers);
   if (!S.data) return;
   if (S.review) return renderReview();
   const q = S.me.role === 'queen';
@@ -285,6 +286,7 @@ function queenDecrees() {
       <div class="stat red"><b>${c('overdue')}</b><span>באיחור</span></div>
     </div>
     ${reviewBanner()}
+    ${statusCard(true)}
     ${eveningPanel()}
     ${waitCard(true)}
     ${summaryCard()}
@@ -317,6 +319,51 @@ function eveningPanel() {
     </div>
   </section>`;
 }
+
+// ---------- "what I'm doing now" ----------
+
+const STATUS_PRESETS = ['בעבודה', 'בדרך הביתה', 'עם הילדים', 'בפגישה', 'מבשל', 'בספורט', 'פנוי בשבילך', 'חושב עלייך'];
+
+function ago(ts) {
+  if (!ts) return '';
+  const m = Math.floor((Date.now() - ts) / 60000);
+  if (m < 1) return 'עכשיו';
+  if (m < 60) return `לפני ${m} דק׳`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `לפני ${h} ש׳` : fmtWhen(ts);
+}
+
+function statusCard(q) {
+  const st = S.data.settings.status || {};
+  const demanding = !!st.demandDue;
+  const timer = demanding ? `<span class="timer" data-due="${st.demandDue}"></span>` : '';
+  if (q) {
+    return `<section class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span class="lbl">העבד עכשיו</span><span class="when">${st.at ? 'עודכן ' + ago(st.at) : ''}</span></div>
+      <div class="statusline">${st.text ? esc(st.text) : '<span class="when">עוד לא עדכן</span>'}</div>
+      ${demanding
+        ? `<div class="banner" style="justify-content:space-between;align-items:center"><span>דרשת עדכון · ${timer}</span><button class="btn quiet" data-act="statusCancel" style="min-height:40px;flex:none">ביטול</button></div>`
+        : `<div class="chips" style="grid-template-columns:1.6fr repeat(3,minmax(0,1fr))"><span class="lbl" style="align-self:center">דרשי עדכון:</span>${[5, 10, 15].map((m) => `<button class="chip" data-act="statusDemand" data-m="${m}">${m} דק׳</button>`).join('')}</div>`}
+    </section>`;
+  }
+  return `<section class="panel${demanding ? ' demand' : ''}">
+    ${demanding ? `<div class="banner" style="justify-content:space-between;align-items:center"><strong>המלכה דורשת עדכון</strong>${timer}</div>` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span class="lbl">מה אני עושה עכשיו</span><span class="when">${st.at ? 'עודכן ' + ago(st.at) : ''}</span></div>
+    ${st.text ? `<div class="statusline">${esc(st.text)}</div>` : ''}
+    <div class="chiprow">${STATUS_PRESETS.map((p) => `<button class="chip" data-act="statusSet" data-t="${esc(p)}">${p}</button>`).join('')}</div>
+    <div class="row2" style="grid-template-columns:1fr auto"><input id="st-text" maxlength="160" placeholder="או במילים שלך…" style="min-width:0;width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--line2);color:var(--text);min-height:44px;padding:8px 12px;font-size:16px"><button class="btn gold" data-act="statusSet">עדכן</button></div>
+  </section>`;
+}
+
+function tickTimers() {
+  for (const el of document.querySelectorAll('.timer[data-due]')) {
+    const left = Number(el.dataset.due) - Date.now();
+    const a = Math.abs(left), m = Math.floor(a / 60000), sec = Math.floor((a % 60000) / 1000);
+    el.textContent = (left < 0 ? 'באיחור ' : 'נשארו ') + `${pad2(m)}:${pad2(sec)}`;
+    el.classList.toggle('late', left < 0);
+  }
+}
+setInterval(tickTimers, 1000);
 
 // ---------- waiting counter ----------
 
@@ -699,8 +746,10 @@ function slaveDecrees() {
       <div class="stat gold"><b>${points.total}</b><span>נקודות צייתנות</span></div>
       <div class="stat${overdue.length ? ' red' : ''}"><b>${open.length}</b><span>לביצוע</span></div>
     </div>
+    ${S.data.settings.status?.demandDue ? statusCard(false) : ''}
     ${reviewBanner()}
     ${slaveStatus()}
+    ${S.data.settings.status?.demandDue ? '' : statusCard(false)}
     ${waitCard(false)}
     ${hero}${banners}${checkinPrompts()}${redeemRequests(false)}
     <div class="row2" style="grid-template-columns:2fr 1fr">
@@ -1255,6 +1304,15 @@ app.addEventListener('click', async (e) => {
       return render();
     }
     case 'ideaGo': return askIdeas();
+    case 'statusSet': {
+      const text = el.dataset.t || document.getElementById('st-text')?.value.trim();
+      if (!text) return document.getElementById('st-text')?.focus();
+      const late = S.data.settings.status?.demandDue && Date.now() > S.data.settings.status.demandDue;
+      const r = await api('/status', { method: 'POST', body: { text } });
+      return act(r, late ? 'עודכן — באיחור, 5 נקודות ירדו' : 'עודכן. המלכה קיבלה התראה.');
+    }
+    case 'statusDemand': { const r = await api('/status/demand', { method: 'POST', body: { minutes: Number(el.dataset.m) } }); return act(r, 'העבד קיבל התראה'); }
+    case 'statusCancel': { const r = await api('/status/cancel', { method: 'POST' }); return act(r); }
     case 'waitStart': {
       const v = document.getElementById('w-start')?.value;
       if (!v) return;

@@ -31,7 +31,7 @@
     // Contact address the push services (Apple/Google) see. Never shown to anyone else.
     "VAPID_SUBJECT": "mailto:yogevabr@gmail.com"
   },
-  // Deadline reminders: an hour before, and when a decree becomes late.
-  "triggers": { "crons": ["*/10 * * * *"] },
+  // Every minute: deadline reminders, rituals, late status updates, weekly summary.
+  "triggers": { "crons": ["* * * * *"] },
   "observability": { "enabled": true }
 }

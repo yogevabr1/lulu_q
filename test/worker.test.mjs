@@ -454,3 +454,39 @@ test('waiting counter: start once, ask, queen answers, yes resets and keeps the 
   assert.ok(Date.now() - r.data.wait.since < 5000);       // reset
   assert.ok(r.data.wait.record >= 30 * 24 * 3600e3 - 5000); // the month became the record
 });
+
+test('status: slave reports, queen demands with a timer, late costs 5 and notifies', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  await env.DB.prepare(`UPDATE settings SET value = '0' WHERE key = 'paused'`).run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  assert.equal((await call('/api/status', { token: QUEEN, lulu: q, method: 'POST', body: { text: 'x' } })).status, 403);
+  let r = await call('/api/status', { token: SLAVE, lulu: s, method: 'POST', body: { text: 'בעבודה' } });
+  assert.equal(r.data.settings.status.text, 'בעבודה');
+  assert.ok(r.data.settings.status.at);
+
+  // On time: no penalty, demand cleared.
+  r = await call('/api/status/demand', { token: QUEEN, lulu: q, method: 'POST', body: { minutes: 5 } });
+  assert.ok(r.data.settings.status.demandDue > Date.now());
+  let before = r.data.points.total;
+  r = await call('/api/status', { token: SLAVE, lulu: s, method: 'POST', body: { text: 'בדרך הביתה' } });
+  assert.equal(r.data.settings.status.demandDue, null);
+  assert.equal(r.data.points.total, before);
+
+  // Late: the scheduler notifies both once, the late update costs 5.
+  await call('/api/status/demand', { token: QUEEN, lulu: q, method: 'POST', body: { minutes: 5 } });
+  await env.DB.prepare(`UPDATE settings SET value = ? WHERE key = 'statusReqDue'`).bind(String(Date.now() - 1000)).run();
+  const { runSchedule } = await import('../src/worker.js');
+  await call('/api/push/subscribe', { token: QUEEN, lulu: q, method: 'POST', body: { endpoint: 'https://push.example/queen-2' } });
+  pushes.length = 0;
+  await runSchedule(env);
+  assert.ok(pushes.some((p) => p.url === 'https://push.example/queen-2'));
+  const n = pushes.length;
+  await runSchedule(env);
+  assert.equal(pushes.filter((p) => p.url === 'https://push.example/queen-2').length, pushes.filter((p, i) => i < n && p.url === 'https://push.example/queen-2').length);
+  r = await call('/api/decrees', { token: SLAVE, lulu: s });
+  before = r.data.points.total;
+  r = await call('/api/status', { token: SLAVE, lulu: s, method: 'POST', body: { text: 'סליחה, המלכה' } });
+  assert.equal(r.data.points.total, before - 5);
+  assert.equal(r.data.points.recent[0].reason, 'עדכון סטטוס באיחור');
+});
