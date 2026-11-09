@@ -510,4 +510,5 @@ test('ideas: "at work" topic stays discreet', async () => {
   const prompt = claudeCalls.at(-1).body.messages[0].content;
   assert.match(prompt, /AT HIS WORKPLACE/);
   assert.match(prompt, /invisible to coworkers/);
+  assert.match(prompt, /locked restroom/);
 });

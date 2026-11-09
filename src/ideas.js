@@ -54,7 +54,7 @@ export async function generateIdeas(env, { vibe, deckLabel, lvl, wish, approved,
   const user = [
     `VIBE: ${VIBES[vibe] || VIBES.playful}`,
     `INTENSITY: ${['', 'light', 'medium', 'strong'][lvl] || 'medium'}`,
-    work ? `TOPIC: AT HIS WORKPLACE — things he does during his workday, away from her. Completely invisible to coworkers and nobody else involved: secret rules, timed messages or check-ins to her, small rituals, things he wears or carries under his clothes, posture or behaviour rules, thinking-of-her tasks, discreet anticipation for tonight. Nothing that could embarrass him or break workplace rules, no intimate photos at work, nothing sexual done at work itself. needsHome is false.`
+    work ? `TOPIC: AT HIS WORKPLACE — things he does during his workday, away from her. Completely invisible to coworkers and nobody else involved: secret rules, timed messages or check-ins to her, small rituals, things he wears or carries under his clothes, posture or behaviour rules, thinking-of-her tasks, discreet anticipation for tonight. Private photos for her are fine when taken alone in a locked restroom, on his personal phone, and sent only to her (e.g. proof he is wearing what she ordered). Nothing anyone else could see or notice, and no sexual acts at work. needsHome is false.`
       : deckLabel ? `TOPIC: ${deckLabel}` : 'TOPIC: any',
     wish ? (mode === 'offer' ? `HE WANTS TO OFFER SOMETHING LIKE: ${wish}` : `THE QUEEN WANTS: ${wish}`) : '',
     `HOUSE FREE NOW: ${homeFree ? 'yes' : 'no — prefer ideas that are fine with the children around'}`,
