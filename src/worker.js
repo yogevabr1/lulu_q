@@ -683,9 +683,12 @@ async function handleApi(request, env, ctx, role, url) {
     const b = await readBody(request);
     const settings = await getSettings(env.DB);
     const cards = await allCards(env.DB);
+    const work = b.deck === 'work';
     const deck = DECKS[b.deck] ? b.deck : null;
     const lvl = [1, 2, 3].includes(b.lvl) ? b.lvl : 2;
-    const pool = cards.filter((c) => c.enabled).filter((c) => (!deck || c.deck === deck) && (!c.needsHome || settings.homeFree));
+    const workDecks = ['rules', 'worship', 'service', 'punish'];
+    const pool = cards.filter((c) => c.enabled).filter((c) => (work ? workDecks.includes(c.deck) && !c.needsHome
+      : (!deck || c.deck === deck) && (!c.needsHome || settings.homeFree)));
     const shuffle = (a) => a.map((x) => [Math.random(), x]).sort((m, n) => m[0] - n[0]).map((x) => x[1]);
     const approved = shuffle(pool).slice(0, 30).map((c) => `${c.title}: ${c.text}`);
     const refused = cards.filter((c) => c.votes.queen === 0 || c.votes.slave === 0).map((c) => c.title).slice(0, 80);
@@ -695,7 +698,7 @@ async function handleApi(request, env, ctx, role, url) {
       vibe: VIBES[b.vibe] ? b.vibe : 'playful', deckLabel: deck ? DECKS[deck].label : null, lvl,
       wish: cleanText(b.wish, 300), approved, refused, recent,
       homeFree: settings.homeFree, protocolLevel: settings.protocol ? settings.protocolLevel : null,
-      mode: role === 'slave' ? 'offer' : 'task'
+      mode: role === 'slave' ? 'offer' : 'task', work
     });
     if (out.error) return err(502, out.error);
     return json({ ideas: out.ideas, why: out.why || null, left: 39 - used });

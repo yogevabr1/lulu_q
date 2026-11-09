@@ -501,3 +501,13 @@ test('status: slave reports, queen demands with a timer, late costs 5 and notifi
   assert.equal(r.data.points.total, before - 5);
   assert.equal(r.data.points.recent[0].reason, 'עדכון סטטוס באיחור');
 });
+
+test('ideas: "at work" topic stays discreet', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const r = await call('/api/ideas', { token: QUEEN, lulu: q, method: 'POST', body: { deck: 'work', vibe: 'tease' }, envOverride: { ...env, ANTHROPIC_API_KEY: 'k' } });
+  assert.equal(r.status, 200);
+  const prompt = claudeCalls.at(-1).body.messages[0].content;
+  assert.match(prompt, /AT HIS WORKPLACE/);
+  assert.match(prompt, /invisible to coworkers/);
+});

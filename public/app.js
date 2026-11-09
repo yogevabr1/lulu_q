@@ -617,7 +617,7 @@ function ideasSheet(close) {
   const I = S.ideas;
   const q = S.me.role === 'queen';
   const chip = (act, key, cur, label) => `<button class="chip${cur === key ? ' on' : ''}" data-act="${act}" data-v="${key}">${label}</button>`;
-  const decks = [['', 'הכול'], ...DECK_ORDER.filter((k) => (q ? k !== 'reward' && k !== 'water' : ['service', 'worship', 'feet'].includes(k))).map((k) => [k, DECK_LABEL[k]])];
+  const decks = [['', 'הכול'], ['work', 'במקום העבודה'], ...DECK_ORDER.filter((k) => (q ? k !== 'reward' && k !== 'water' : ['service', 'worship', 'feet'].includes(k))).map((k) => [k, DECK_LABEL[k]])];
   let results = '';
   if (I.loading) results = '<p class="empty">חושבת על רעיונות…</p>';
   else if (I.error) results = `<div class="banner"><span>${esc(I.error)}</span></div>`;
