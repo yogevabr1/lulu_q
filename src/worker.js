@@ -6,7 +6,7 @@ import {
 } from './logic.js';
 import { DECKS, CARDS } from './cards.js';
 import { notify, vapidKeys } from './push.js';
-import { generateIdeas, VIBES } from './ideas.js';
+import { generateIdeas, VIBES, checkKey } from './ideas.js';
 import { tzParts as _tz } from './logic.js';
 
 // ---------- responses ----------
@@ -553,6 +553,11 @@ async function handleApi(request, env, ctx, role, url) {
   if (path === '/review/done' && method === 'POST') {
     push([other(role)]);
     return json(await cardsPayload(env.DB, role));
+  }
+
+  // ----- connection check for ideas (both of you) -----
+  if (path === '/ideas/check' && method === 'POST') {
+    return json(await checkKey(env));
   }
 
   // ----- task ideas from Claude (queen only) -----

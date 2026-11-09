@@ -811,6 +811,8 @@ function limitsView(q) {
     </section>
     ${reviewResults()}
     <button class="btn" data-act="tour">איך האפליקציה עובדת?</button>
+    <button class="btn quiet" data-act="checkIdeas" ${S.keyCheck === '…' ? 'disabled' : ''}>בדיקת חיבור לרעיונות</button>
+    ${S.keyCheck && S.keyCheck !== '…' ? `<div class="banner${S.keyCheck.startsWith('✓') ? ' gold' : ''}"><span>${esc(S.keyCheck)}</span></div>` : ''}
     <div class="sec"><h2>צ'ק־אינים</h2><span>אחרי כל ◆◆◆</span></div>
     ${checkinResults()}
     <div class="sec"><h2>ספר החוקים</h2><span>לשניכם</span></div>
@@ -1180,6 +1182,21 @@ app.addEventListener('click', async (e) => {
       return render();
     }
     case 'ideaGo': return askIdeas();
+    case 'checkIdeas': {
+      S.keyCheck = '…'; render();
+      const r = await api('/ideas/check', { method: 'POST' });
+      const why = {
+        missing: 'המפתח לא נמצא. צריך להוסיף ב־Cloudflare משתנה מסוג Secret בשם ANTHROPIC_API_KEY ולעשות Deploy.',
+        'bad key': 'Anthropic דחו את המפתח (401). כנראה הוא לא מפתח API תקין — צריך מפתח שמתחיל ב־sk-ant-api.',
+        forbidden: 'למפתח אין הרשאה (403). כדאי לבדוק את הגדרות החשבון ב־console.anthropic.com.',
+        model: 'המודל לא זמין לחשבון הזה (404).',
+        rate: 'יותר מדי בקשות כרגע (429). נסו שוב בעוד דקה.',
+        credit: 'אין יתרה בחשבון. צריך להטעין ב־console.anthropic.com ← Billing.',
+        network: 'לא הצלחתי להגיע ל־Anthropic. נסו שוב.'
+      };
+      S.keyCheck = r.ok ? '✓ החיבור עובד. הרעיונות מוכנים.' : r.error ? 'הבדיקה לא הצליחה. נסו שוב.' : (why[r.reason] || `שגיאה ${r.status || ''}: ${r.message || ''}`);
+      return render();
+    }
     case 'ideaUse': {
       const x = S.ideas.list[Number(el.dataset.i)];
       S.draft = { title: x.title, deadline: defaultDeadline(), note: x.text, severity: x.severity, freq: 'once', time: '20:00', weekday: new Date().getDay() };

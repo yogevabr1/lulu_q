@@ -416,3 +416,11 @@ test('ideas from Claude: queen only, needs a key, limits go into the prompt', as
   assert.match(prompt, /THE QUEEN WANTS: משהו נעים/);
   assert.doesNotMatch(prompt + sent.body.system, /gmail|ליאור|יוגב/i); // nothing identifying
 });
+
+test('ideas connection check', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  assert.deepEqual((await call('/api/ideas/check', { token: SLAVE, lulu: s, method: 'POST' })).data, { ok: false, reason: 'missing' });
+  const r = await call('/api/ideas/check', { token: SLAVE, lulu: s, method: 'POST', envOverride: { ...env, ANTHROPIC_API_KEY: 'k' } });
+  assert.deepEqual(r.data, { ok: true });
+});

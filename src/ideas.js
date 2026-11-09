@@ -72,3 +72,23 @@ export function parseIdeas(text) {
     return [];
   }
 }
+
+// A tiny request just to see whether the key works. Costs next to nothing.
+export async function checkKey(env) {
+  if (!env.ANTHROPIC_API_KEY) return { ok: false, reason: 'missing' };
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: env.IDEAS_MODEL || 'claude-sonnet-5-5', max_tokens: 5, messages: [{ role: 'user', content: 'ping' }] })
+    });
+    if (res.ok) return { ok: true };
+    let message = '';
+    try { message = (await res.json())?.error?.message || ''; } catch {}
+    const reason = res.status === 401 ? 'bad key' : res.status === 403 ? 'forbidden'
+      : res.status === 404 ? 'model' : res.status === 429 ? 'rate' : /credit|balance|billing/i.test(message) ? 'credit' : 'other';
+    return { ok: false, reason, status: res.status, message: message.slice(0, 200) };
+  } catch {
+    return { ok: false, reason: 'network' };
+  }
+}
