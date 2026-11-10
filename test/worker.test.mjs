@@ -556,3 +556,70 @@ test('extension: slave asks with a reason, queen approves (deadline moves) or de
   assert.equal(get(r).deadline, Math.floor(dl + 3 * 3600e3));
   assert.equal(get(r).extension.status, 'denied');
 });
+
+test('ratings after every approved decree, hidden until both, skip, and learning in the ideas prompt', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  await env.DB.prepare(`UPDATE settings SET value = '0' WHERE key = 'paused'`).run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  const make = async (title, note) => {
+    let r = await call('/api/decrees', { token: QUEEN, lulu: q, method: 'POST', body: { title, note, severity: 'request' } });
+    const id = r.data.decrees.find((d) => d.title === title).id;
+    await call(`/api/decrees/${id}/submit`, { token: SLAVE, lulu: s, method: 'POST' });
+    r = await call(`/api/decrees/${id}/approve`, { token: QUEEN, lulu: q, method: 'POST' });
+    return r.data.checkins.find((c) => c.decreeId === id);
+  };
+  const loved = await make('אמבט רגליים בנרות', 'עם שמן לבנדר');
+  assert.ok(loved, 'a plain request gets a rating too');
+  await call(`/api/checkins/${loved.id}`, { token: SLAVE, lulu: s, method: 'POST', body: { score: 5, note: 'הרגשתי שלה' } });
+  let r = await call('/api/decrees', { token: QUEEN, lulu: q });
+  assert.equal(r.data.checkins.find((c) => c.id === loved.id).theirs, null); // hidden
+  r = await call(`/api/checkins/${loved.id}`, { token: QUEEN, lulu: q, method: 'POST', body: { score: 4, note: 'מושלם' } });
+  assert.equal(r.data.checkins.find((c) => c.id === loved.id).theirs.note, 'הרגשתי שלה');
+
+  const meh = await make('לספור אריחים', '');
+  await call(`/api/checkins/${meh.id}`, { token: SLAVE, lulu: s, method: 'POST', body: { score: 1 } });
+  await call(`/api/checkins/${meh.id}`, { token: QUEEN, lulu: q, method: 'POST', body: { score: 3 } });
+  const skipped = await make('משהו שדילגו', '');
+  r = await call(`/api/checkins/${skipped.id}`, { token: SLAVE, lulu: s, method: 'POST', body: { score: 0, note: 'x' } });
+  assert.equal(r.data.checkins.find((c) => c.id === skipped.id).mine.score, 0);
+
+  r = await call('/api/ideas', { token: QUEEN, lulu: q, method: 'POST', body: {}, envOverride: { ...env, ANTHROPIC_API_KEY: 'k' } });
+  assert.ok(r.data.learnedFrom >= 2);
+  const prompt = claudeCalls.at(-1).body.messages[0].content;
+  assert.match(prompt, /LOVED[\s\S]*אמבט רגליים בנרות[\s\S]*עם שמן לבנדר[\s\S]*הרגשתי שלה/);
+  assert.match(prompt, /DISLIKED[\s\S]*לספור אריחים/);
+  assert.doesNotMatch(prompt.slice(prompt.indexOf('LOVED')), /משהו שדילגו/); // skips don't teach
+});
+
+test('notifications inbox: events per person, unseen count, mark seen', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  await env.DB.prepare(`UPDATE settings SET value = '0' WHERE key = 'paused'`).run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  await flush();
+  await call('/api/events/seen', { token: SLAVE, lulu: s, method: 'POST' });
+  await call('/api/events/seen', { token: QUEEN, lulu: q, method: 'POST' });
+
+  let r = await call('/api/decrees', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'להבריק נעליים' } });
+  await flush();
+  const id = r.data.decrees.find((d) => d.title === 'להבריק נעליים').id;
+  r = await call('/api/decrees', { token: SLAVE, lulu: s });
+  assert.equal(r.data.unseen, 1);
+  let ev = (await call('/api/events', { token: SLAVE, lulu: s })).data.events;
+  assert.equal(ev[0].text, 'צו חדש: להבריק נעליים');
+  assert.equal(ev[0].seen, null);
+
+  await call(`/api/decrees/${id}/submit`, { token: SLAVE, lulu: s, method: 'POST' });
+  await flush();
+  ev = (await call('/api/events', { token: QUEEN, lulu: q })).data.events;
+  assert.deepEqual([ev[0].text, ev[0].tab, ev[0].ref], ['הוגש לאישורך: להבריק נעליים', 'decrees', String(id)]);
+  // The slave's own action doesn't land in his own inbox.
+  assert.ok(!(await call('/api/events', { token: SLAVE, lulu: s })).data.events.some((e) => e.text.startsWith('הוגש')));
+
+  await call('/api/events/seen', { token: SLAVE, lulu: s, method: 'POST' });
+  r = await call('/api/decrees', { token: SLAVE, lulu: s });
+  assert.equal(r.data.unseen, 0);
+  ev = (await call('/api/events', { token: SLAVE, lulu: s })).data.events;
+  assert.ok(ev[0].seen); // still listed, now as seen
+});

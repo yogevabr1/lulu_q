@@ -50,7 +50,7 @@ Write FOUR offer ideas. Rules you never break:
 Answer with JSON only, no other text:
 {"ideas":[{"title":"...","text":"...","severity":"command","needsHome":false}]}`;
 
-export async function generateIdeas(env, { vibe, deckLabel, lvl, wish, approved, refused, recent, homeFree, protocolLevel, mode, work }) {
+export async function generateIdeas(env, { vibe, deckLabel, lvl, wish, approved, refused, recent, homeFree, protocolLevel, mode, work, loved = [], disliked = [] }) {
   const user = [
     `VIBE: ${VIBES[vibe] || VIBES.playful}`,
     `INTENSITY: ${['', 'light', 'medium', 'strong'][lvl] || 'medium'}`,
@@ -61,7 +61,9 @@ export async function generateIdeas(env, { vibe, deckLabel, lvl, wish, approved,
     protocolLevel ? `TONIGHT'S PROTOCOL LEVEL: ${protocolLevel}/3` : '',
     `APPROVED (examples of what they like): ${approved.join(' | ') || '—'}`,
     `REFUSED (never anything like these): ${refused.join(' | ') || '—'}`,
-    `RECENT (don't repeat): ${recent.join(' | ') || '—'}`
+    `RECENT (don't repeat): ${recent.join(' | ') || '—'}`,
+    loved.length ? `LOVED — acts they both rated highly after doing them. Learn from these: propose NEW ideas with similar mechanics, mood, intensity and what made them work (read their words). Don't repeat them:\n- ${loved.join('\n- ')}` : '',
+    disliked.length ? `DISLIKED — at least one of them rated these low. Steer away from what these have in common:\n- ${disliked.join('\n- ')}` : ''
   ].filter(Boolean).join('\n');
 
   let why = 'empty';

@@ -17,7 +17,7 @@ self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   e.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    for (const c of all) if ('focus' in c) return c.focus();
+    for (const c of all) if ('focus' in c) { c.postMessage('lulu-open'); return c.focus(); }
     return self.clients.openWindow('/');
   })());
 });

@@ -54,7 +54,7 @@ http.createServer(async (req, res) => {
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
   if (tokens[as]) headers.set('Cf-Access-Jwt-Assertion', tokens[as]);
-  const r = await worker.fetch(new Request(url, { method: req.method, headers, body: chunks.length ? Buffer.concat(chunks) : undefined }), env, { waitUntil: () => {} });
+  const r = await worker.fetch(new Request(url, { method: req.method, headers, body: chunks.length ? Buffer.concat(chunks) : undefined }), env, { waitUntil: (p) => p.catch(() => {}) });
   const out = {}; r.headers.forEach((v, k) => (out[k] = v));
   if (url.searchParams.get('as')) out['set-cookie'] = `dev_as=${as}; Path=/`;
   res.writeHead(r.status, out);

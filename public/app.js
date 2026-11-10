@@ -60,6 +60,7 @@ const icon = {
   plus: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#f6ece0" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
   x: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#b8a690" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   check: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c9a45c" stroke-width="2" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>',
+  bell: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>',
   pause: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 5v14M15 5v14"/></svg>',
   cards: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="5" width="11" height="16" rx="1"/><path d="M9 3h10a1 1 0 0 1 1 1v14"/></svg>',
   book: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 21V5M8 7h7"/></svg>',
@@ -174,6 +175,7 @@ async function enterCourt() {
   let seen = true;
   try { seen = localStorage.getItem('lulu_tour_' + S.me.role) === '1'; } catch {}
   if (!seen && S.data) { S.sheet = { type: 'tour', i: 0 }; render(); }
+  else showWhatsNew();
   loadCards();
 }
 
@@ -209,6 +211,7 @@ function render() {
           </div>
         </div>
         <div style="display:flex;gap:6px">
+          <button class="btn quiet bell" data-act="inbox" aria-label="התראות${S.data.unseen ? ` — ${S.data.unseen} חדשות` : ''}" style="min-width:44px;padding:8px 10px">${icon.bell}${S.data.unseen ? `<span class="badge">${S.data.unseen > 9 ? '9+' : S.data.unseen}</span>` : ''}</button>
           ${st.paused ? '' : `<button class="btn quiet" data-act="pause" aria-label="הפוגה — לעצור הכול" title="הפוגה" style="min-width:44px;padding:8px 10px">${icon.pause}</button>`}
           <button class="btn quiet" data-act="lock" aria-label="נעילה" style="min-width:44px;padding:8px 10px">${icon.lock}</button>
         </div>
@@ -288,10 +291,11 @@ function card(d, q, now) {
   if (!q && openish && !reward && d.deadline && !(ex && ex.status === 'pending')) {
     actions += `<button class="link" data-act="extAsk" data-id="${d.id}">בקשת הארכה</button>`;
   }
-  return `<article class="card ${d.status}">
+  return `<article class="card ${d.status}" id="d-${d.id}">
     <div class="meta">${label}<span class="st ${doing ? 'doing' : d.status}">${statusTxt}</span></div>
     <h3>${esc(d.title)}</h3>
     <span class="when${late ? ' late' : ''}">${when}</span>
+    ${d.status === 'done' ? (() => { const c = (S.data.checkins || []).find((x) => x.decreeId === d.id); return c && c.answered ? ratingPair(c) : c ? `<button class="link" data-act="checkin" data-id="${c.id}">לדרג ★</button>` : ''; })() : ''}
     ${note}${report}${rejected}${extHtml}${actions}
   </article>`;
 }
@@ -360,7 +364,7 @@ function statusCard(q) {
   const demanding = !!st.demandDue;
   const timer = demanding ? `<span class="timer" data-due="${st.demandDue}"></span>` : '';
   if (q) {
-    return `<section class="panel">
+    return `<section class="panel" id="sec-status">
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span class="lbl">העבד עכשיו</span><span class="when">${st.at ? 'עודכן ' + ago(st.at) : ''}</span></div>
       <div class="statusline">${st.text ? esc(st.text) : '<span class="when">עוד לא עדכן</span>'}</div>
       ${st.lateBy ? `<div class="banner gold" style="flex-direction:column;align-items:stretch">
@@ -372,7 +376,7 @@ function statusCard(q) {
         : `<div class="chips" style="grid-template-columns:1.6fr repeat(3,minmax(0,1fr))"><span class="lbl" style="align-self:center">דרשי עדכון:</span>${[5, 10, 15].map((m) => `<button class="chip" data-act="statusDemand" data-m="${m}">${m} דק׳</button>`).join('')}</div>`}
     </section>`;
   }
-  return `<section class="panel${demanding ? ' demand' : ''}">
+  return `<section class="panel${demanding ? ' demand' : ''}" id="sec-status">
     ${demanding ? `<div class="banner" style="justify-content:space-between;align-items:center"><strong>המלכה דורשת עדכון</strong>${timer}</div>` : ''}
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span class="lbl">מה אני עושה עכשיו</span><span class="when">${st.at ? 'עודכן ' + ago(st.at) : ''}</span></div>
     ${st.text ? `<div class="statusline">${esc(st.text)}</div>` : ''}
@@ -390,6 +394,51 @@ function tickTimers() {
   }
 }
 setInterval(tickTimers, 1000);
+
+// ---------- notifications inbox ----------
+
+async function openInbox(onlyNew) {
+  const r = await api('/events');
+  if (!r.events) return;
+  S.events = r.events;
+  S.sheet = { type: 'inbox', onlyNew: !!onlyNew };
+  render();
+  // Seen once shown; the dots stay until the sheet closes, so you can see what was new.
+  if (r.events.some((e) => !e.seen)) { await api('/events/seen', { method: 'POST' }); if (S.data) S.data.unseen = 0; }
+}
+
+async function showWhatsNew(force) {
+  if (!S.token || !S.data || !S.data.unseen) return;
+  if (S.sheet && !force) return;
+  return openInbox(true);
+}
+
+function inboxSheet(close) {
+  const all = S.events || [];
+  const list = S.sheet.onlyNew ? all.filter((e) => !e.seen) : all;
+  const items = list.length ? list.map((e) => `<button class="evrow${e.seen ? '' : ' new'}" data-act="evGo" data-tab="${esc(e.tab || '')}" data-ref="${esc(e.ref || '')}">
+      <span class="t">${esc(e.text)}</span><span class="d">${ago(e.created)}</span>
+    </button>`).join('') : '<p class="empty">אין התראות.</p>';
+  return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="התראות">
+    <div class="hd"><h2>${S.sheet.onlyNew ? 'מה חדש' : 'התראות'}</h2>${close}</div>
+    <div class="evlist">${items}</div>
+    ${S.sheet.onlyNew && all.length > list.length ? '<button class="btn quiet" data-act="inboxAll">לכל ההתראות</button>' : ''}
+  </section></div>`;
+}
+
+function goTo(tab, ref) {
+  S.sheet = null;
+  const tabs = ['decrees', 'cards', 'points', 'limits'];
+  S.tab = tabs.includes(tab) && (tab !== 'cards' || S.me.role === 'queen') ? tab : 'decrees';
+  render();
+  if (S.tab === 'limits' || S.tab === 'cards') loadCards();
+  const target = /^\d+$/.test(ref || '') ? `d-${ref}` : ref ? `sec-${ref}` : null;
+  requestAnimationFrame(() => {
+    const el = target && document.getElementById(target);
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1800); }
+    else window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+}
 
 // ---------- waiting counter ----------
 
@@ -417,14 +466,14 @@ function waitCard(q) {
   const top = `<div class="waitnum"><b>${days}</b><span>${days === 1 ? 'יום' : 'ימים'}${hours ? ` ו־${hours} ש׳` : ''}</span></div>
     <span class="when">ימי המתנה · שיא: ${record}</span>`;
   if (!q) {
-    return `<section class="hero" style="align-items:center;text-align:center">
+    return `<section class="hero" id="sec-wait" style="align-items:center;text-align:center">
       ${top}
       ${w.pending ? `<span class="st submitted">ביקשת רשות ${fmtWhen(w.pending.created)}. המלכה תחליט.</span>`
         : `${last ? `<span class="when">התשובה האחרונה: <strong>${ans[last.status]}</strong>${last.answer ? ` — "${esc(last.answer)}"` : ''}</span>` : ''}
            <button class="btn gold" data-act="waitAsk" style="width:100%">לבקש רשות</button>`}
     </section>`;
   }
-  return `<section class="hero" style="align-items:center;text-align:center">
+  return `<section class="hero" id="sec-wait" style="align-items:center;text-align:center">
     <span class="k">העבד מחכה</span>
     ${top}
     ${w.pending ? `<div class="banner gold" style="flex-direction:column;align-items:stretch;text-align:right;width:100%">
@@ -480,22 +529,34 @@ function offerRequests(q) {
   }).join('');
 }
 
+const stars = (n) => (n ? `<span class="stars" aria-label="${n} מתוך 5">${'★'.repeat(n)}${'☆'.repeat(5 - n)}</span>` : '<span class="when">דילג</span>');
+
+// Rating prompts: one card per unrated task, the newest few, with a count of the rest.
 function checkinPrompts() {
   const open = (S.data.checkins || []).filter((c) => !c.answered);
-  return open.map((c) => `<div class="banner gold" style="flex-direction:column;align-items:stretch">
-    <span><strong>צ'ק־אין אחרי "${esc(c.title)}"</strong>. רק אתם רואים, ואחד לא רואה את השני עד ששניכם עונים.</span>
-    <button class="btn gold" data-act="checkin" data-id="${c.id}">לענות</button>
-  </div>`).join('');
+  if (!open.length) return '';
+  const shown = open.slice(0, 2);
+  return shown.map((c) => `<div class="banner gold" style="flex-direction:column;align-items:stretch">
+    <span><strong>איך היה "${esc(c.title)}"?</strong> דרגו בכוכבים ובכמה מילים. ${S.me.role === 'queen' ? 'העבד' : 'המלכה'} יראה רק כששניכם עניתם.</span>
+    <button class="btn gold" data-act="checkin" data-id="${c.id}">לדרג</button>
+  </div>`).join('') + (open.length > 2 ? `<p class="when" style="text-align:center">ועוד ${open.length - 2} שמחכים לדירוג</p>` : '');
+}
+
+// The pair of ratings for one task, once both are in.
+function ratingPair(c) {
+  const them = S.me.role === 'queen' ? 'העבד' : 'המלכה';
+  return `<div class="ratings">
+    <p><b>אני</b> ${stars(c.mine.score)}${c.mine.note ? `<span>${esc(c.mine.note)}</span>` : ''}</p>
+    <p><b>${them}</b> ${c.theirs ? `${stars(c.theirs.score)}${c.theirs.note ? `<span>${esc(c.theirs.note)}</span>` : ''}` : '<span class="when">התשובה תופיע כששניכם עניתם</span>'}</p>
+  </div>`;
 }
 
 function checkinResults() {
   const list = (S.data.checkins || []).filter((c) => c.answered);
-  if (!list.length) return '<p class="empty">אין עדיין. צ\'ק־אין נפתח אחרי כל קלף ◆◆◆.</p>';
-  const them = S.me.role === 'queen' ? 'העבד' : 'המלכה';
+  if (!list.length) return '<p class="empty">אין עדיין. דירוג נפתח אחרי כל צו שהמלכה מאשרת.</p>';
   return list.map((c) => `<div class="limrow">
     <div class="lt"><span class="t">${esc(c.title)}</span><span class="d">${fmtWhen(c.created)}</span></div>
-    <p>אני: ${'★'.repeat(c.mine.score)}${'☆'.repeat(5 - c.mine.score)}${c.mine.note ? ` — ${esc(c.mine.note)}` : ''}</p>
-    <p>${them}: ${c.theirs ? `${'★'.repeat(c.theirs.score)}${'☆'.repeat(5 - c.theirs.score)}${c.theirs.note ? ` — ${esc(c.theirs.note)}` : ''}` : 'עוד לא ענה. התשובה תופיע כששניכם עניתם.'}</p>
+    ${ratingPair(c)}
   </div>`).join('');
 }
 
@@ -656,7 +717,7 @@ function ideasSheet(close) {
     <div class="field"><span class="lbl">עוצמה</span><div class="chips">${[1, 2, 3].map((n) => chip('ideaLvl', String(n), String(I.lvl), '◆'.repeat(n))).join('')}</div></div>
     <div class="field"><label for="i-wish">${q ? 'מה בא לך? (לא חובה)' : 'כיוון משלך? (לא חובה)'}</label><input id="i-wish" maxlength="300" value="${esc(I.wish)}" placeholder="${q ? 'למשל: משהו עם הרגליים, לפני השינה' : 'למשל: לפנק אותה אחרי יום ארוך'}"></div>
     <button class="btn blood" data-act="ideaGo" ${I.loading ? 'disabled' : ''}>${I.list ? 'עוד רעיונות' : q ? 'תני לי רעיונות' : 'תן לי רעיונות'}</button>
-    <p class="when" style="text-align:center">רק בתוך מה ששניכם סימנתם ✓. מה שאחד סימן ✗ — לא יוצע.</p>
+    <p class="when" style="text-align:center">רק בתוך מה ששניכם סימנתם ✓. מה שאחד סימן ✗ — לא יוצע.${I.learned ? `<br>לומד מ־${I.learned} דירוגים שלכם.` : ''}</p>
     ${results}
   </section></div>`;
 }
@@ -668,6 +729,7 @@ async function askIdeas() {
   const r = await api('/ideas', { method: 'POST', body: { vibe: S.ideas.vibe, deck: S.ideas.deck || null, lvl: S.ideas.lvl, wish: S.ideas.wish } });
   S.ideas.loading = false;
   if (r.ideas) {
+    S.ideas.learned = r.learnedFrom || 0;
     S.ideas.list = r.ideas;
     if (!r.ideas.length) S.ideas.error = r.why === 'refused' ? 'Claude לא רצה להציע משהו לבקשה הזאת. נסו לנסח אחרת או להוריד עוצמה.'
       : r.why === 'cut' ? 'התשובה נקטעה. נסו שוב.' : 'התשובה הגיעה בפורמט לא צפוי. נסו שוב.';
@@ -688,7 +750,7 @@ const TOUR = {
     ['קלפים', ['מסך "קלפים": שבע חפיסות, מסנן עוצמה (◆ עד ◆◆◆), שליפה אקראית או בחירה, ו"הענקי לעבד".', 'השפלה, כאב ומים — רק כשמסומן "הבית פנוי". ב"+ קלף משלך" מוסיפים קלפים חדשים.']],
     ['נקודות', ['העבד צובר על צווים שבוצעו, ומפסיד על הפרות. במסך "נקודות" יש כפתורים מהירים: בונוס, פנייה שגויה, ויכוח.', 'כשהעבד מבקש להמיר נקודות — הבקשה מופיעה אצלך. את מחליטה.']],
     ['מצב הערב', ['למעלה במסך הצווים: מצב המלכה (זמינה, לא להפריע, מחכה לך) ומתג הפרוטוקול עם עוצמה לערב.', 'העבד יכול להציע שירות ביוזמתו — את הופכת לצו או מוותרת.']],
-    ['גבולות וצ\'ק־אין', ['במסך "חוקים" כל אחד מכם יכול לפסול כל קלף. קלף שאחד פוסל — לא נשלף. קלפים מסומנים "ירוק" נעולים עד ששניכם מאשרים.', 'אחרי כל קלף ◆◆◆ שניכם מקבלים צ\'ק־אין קצר. אף אחד לא רואה את התשובה של השני עד ששניכם עניתם.']],
+    ['גבולות וצ\'ק־אין', ['במסך "חוקים" כל אחד מכם יכול לפסול כל קלף. קלף שאחד פוסל — לא נשלף. קלפים מסומנים "ירוק" נעולים עד ששניכם מאשרים.', 'אחרי כל צו שאושר, שניכם מדרגים בכוכבים ובכמה מילים. אף אחד לא רואה את הדירוג של השני עד ששניכם עניתם — והדירוגים מלמדים את הרעיונות מה אתם אוהבים.']],
     ['ביטחון', ['⏸ למעלה — הפוגה: עוצר הכול, לשניכם, בכל רגע. 🔒 — נעילה מיידית. אחרי 5 דקות ברקע האפליקציה ננעלת לבד.', 'ההתראות תמיד ניטרליות: "יש עדכון חדש". מפעילים אותן במסך "חוקים".']],
     ['ועכשיו: תיאום ציפיות', ['לפני שמתחילים, כל אחד מכם עובר על כל הקלפים ומסמן ✓ או ✗.', 'אף אחד לא רואה את הסימונים של השני עד ששניכם מסיימים — ואז תראו יחד על מה הסכמתם ועל מה כדאי לדבר. הכפתור מחכה במסך הצווים.']]
   ],
@@ -698,7 +760,7 @@ const TOUR = {
     ['קלפים ופרסים', ['קלפים שהמלכה שולפת מגיעים אליך כצווים, עם החפיסה שלהם.', 'פרס מגיע בזהב — "לבקש לממש" כשתרצה להשתמש בו.']],
     ['נקודות', ['בקשה 5, פקודה 10, צו מלכותי 20 — וחצי באיחור. הפרות מורידות.', 'במסך "נקודות" אפשר לבקש להמיר. המלכה רשאית לסרב.']],
     ['מצב המלכה והצעת שירות', ['למעלה תראה את מצב המלכה, ומתי הפרוטוקול פעיל — אז פונים רק "המלכה".', '"הצעת שירות" — אתה מציע משהו ביוזמתך, והיא מחליטה אם זה הופך לצו. אין רעיון? ✨ רעיונות לשירות.']],
-    ['גבולות וצ\'ק־אין', ['במסך "חוקים" אתה יכול לפסול כל קלף, בלי להסביר. קלפים מסומנים "ירוק" נעולים עד ששניכם מאשרים.', 'אחרי כל קלף ◆◆◆ — צ\'ק־אין קצר ופרטי. התשובות נחשפות רק כששניכם עניתם.']],
+    ['גבולות וצ\'ק־אין', ['במסך "חוקים" אתה יכול לפסול כל קלף, בלי להסביר. קלפים מסומנים "ירוק" נעולים עד ששניכם מאשרים.', 'אחרי כל צו שאושר — דירוג קצר בכוכבים ובמילים. הדירוגים נחשפים רק כששניכם עניתם, ומלמדים את הרעיונות.']],
     ['ביטחון', ['⏸ למעלה — הפוגה: עוצר הכול, בכל רגע, בלי עונש. 🔒 — נעילה מיידית.', 'ההתראות תמיד ניטרליות. מפעילים אותן במסך "חוקים".']],
     ['ועכשיו: תיאום ציפיות', ['לפני שמתחילים, כל אחד מכם עובר על כל הקלפים ומסמן ✓ או ✗ — בכנות.', 'המלכה לא רואה את הסימונים שלך עד ששניכם מסיימים. אז תראו יחד על מה הסכמתם ועל מה כדאי לדבר. הכפתור מחכה במסך הצווים.']]
   ]
@@ -952,7 +1014,7 @@ function limitsView(q) {
     <button class="btn" data-act="tour">איך האפליקציה עובדת?</button>
     <button class="btn quiet" data-act="checkIdeas" ${S.keyCheck === '…' ? 'disabled' : ''}>בדיקת חיבור לרעיונות</button>
     ${S.keyCheck && S.keyCheck !== '…' ? `<div class="banner${S.keyCheck.startsWith('✓') ? ' gold' : ''}"><span>${esc(S.keyCheck)}</span></div>` : ''}
-    <div class="sec"><h2>צ'ק־אינים</h2><span>אחרי כל ◆◆◆</span></div>
+    <div class="sec" id="sec-ratings"><h2>דירוגים</h2><span>אחרי כל צו שאושר</span></div>
     ${checkinResults()}
     <div class="sec"><h2>ספר החוקים</h2><span>לשניכם</span></div>
     ${guide}
@@ -1025,6 +1087,7 @@ function sheetView() {
   const close = `<button class="x" data-act="close" aria-label="סגירה">${icon.x}</button>`;
   if (s.type === 'pts') return customPointsSheet();
   if (s.type === 'tour') return tourSheet();
+  if (s.type === 'inbox') return inboxSheet(close);
   if (s.type === 'extend') {
     const d = S.data.decrees.find((x) => x.id === s.id);
     if (!d) return '';
@@ -1072,13 +1135,19 @@ function sheetView() {
   if (s.type === 'checkin') {
     const c = (S.data.checkins || []).find((x) => x.id === s.id);
     if (!c) return '';
-    return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="צ'ק־אין">
-      <div class="hd"><h2>צ'ק־אין</h2>${close}</div>
+    const labels = ['', 'לא נהניתי', 'פחות', 'בסדר', 'נהניתי', 'מושלם'];
+    return `<div class="sheetwrap" data-act="backdrop"><section class="sheet" role="dialog" aria-modal="true" aria-label="דירוג">
+      <div class="hd"><h2>איך היה?</h2>${close}</div>
       <p class="quote">${esc(c.title)}</p>
-      <div class="field"><span class="lbl">איך היה בשבילך?</span><div class="chips" style="grid-template-columns:repeat(5,minmax(0,1fr))">${[1, 2, 3, 4, 5].map((n) => `<button class="chip${s.score === n ? ' on' : ''}" data-act="ciScore" data-n="${n}" aria-label="${n} מתוך 5">${n}</button>`).join('')}</div>
-        <span class="when">1 — לא טוב לי · 5 — מושלם</span></div>
-      <div class="field"><label for="ci-note">מה לשמור, מה לשנות (לא חובה)</label><textarea id="ci-note" maxlength="500" placeholder="יותר חזק, פחות זמן, לא את זה שוב…"></textarea></div>
-      <button class="btn blood" data-act="doCheckin" ${s.score ? '' : 'disabled'}>שליחה</button>
+      <div class="field"><span class="lbl">כמה נהנית מזה?</span>
+        <div class="starpick">${[1, 2, 3, 4, 5].map((n) => `<button class="star${s.score >= n ? ' on' : ''}" data-act="ciScore" data-n="${n}" aria-label="${n} מתוך 5 — ${labels[n]}">★</button>`).join('')}</div>
+        <span class="when" style="text-align:center;display:block">${s.score ? labels[s.score] : 'בחרו כוכבים'}</span></div>
+      <div class="field"><label for="ci-note">מה עבר עליך? (כמה מילים)</label><textarea id="ci-note" maxlength="500" placeholder="מה הרגשת, מה הכי עבד, מה היית משנה…"></textarea></div>
+      <p class="when">${S.me.role === 'queen' ? 'העבד' : 'המלכה'} יראה את הדירוג שלך רק כששניכם עניתם. הדירוגים מלמדים את הרעיונות מה אתם אוהבים.</p>
+      <div class="row2" style="grid-template-columns:1fr 2fr">
+        <button class="btn quiet" data-act="ciSkip">לדלג</button>
+        <button class="btn blood" data-act="doCheckin" ${s.score ? '' : 'disabled'}>שליחה</button>
+      </div>
     </section></div>`;
   }
   if (s.type === 'send') {
@@ -1322,9 +1391,12 @@ app.addEventListener('click', async (e) => {
     case 'ciScore': { const note = document.getElementById('ci-note')?.value || ''; S.sheet.score = Number(el.dataset.n); render(); const t = document.getElementById('ci-note'); if (t) t.value = note; return; }
     case 'doCheckin': {
       el.disabled = true;
+      const c = (S.data.checkins || []).find((x) => x.id === S.sheet.id);
       const r = await api(`/checkins/${S.sheet.id}`, { method: 'POST', body: { score: S.sheet.score, note: document.getElementById('ci-note')?.value || '' } });
-      return act(r, 'תודה. נשמר.');
+      const done = r.checkins?.find((x) => x.id === c?.id);
+      return act(r, done?.both ? 'שניכם דירגתם — הדירוגים נחשפו' : 'נשמר. יופיע כששניכם תענו.');
     }
+    case 'ciSkip': { const r = await api(`/checkins/${S.sheet.id}`, { method: 'POST', body: { score: 0 } }); return act(r, 'דילגת'); }
     case 'tour': S.sheet = { type: 'tour', i: 0 }; return render();
     case 'tourNext': S.sheet.i++; return render();
     case 'tourBack': S.sheet.i = Math.max(0, S.sheet.i - 1); return render();
@@ -1342,6 +1414,9 @@ app.addEventListener('click', async (e) => {
       return render();
     }
     case 'ideaGo': return askIdeas();
+    case 'inbox': return openInbox(false);
+    case 'inboxAll': S.sheet.onlyNew = false; return render();
+    case 'evGo': return goTo(el.dataset.tab, el.dataset.ref);
     case 'statusSet': {
       const text = el.dataset.t || document.getElementById('st-text')?.value.trim();
       if (!text) return document.getElementById('st-text')?.focus();
@@ -1529,9 +1604,16 @@ document.addEventListener('visibilitychange', () => {
   } else {
     app.style.visibility = '';
     if (S.token && Date.now() - S.hiddenAt > LOCK_AFTER_MS) return lock();
-    if (S.token) { setCourt(); refresh(); }
+    if (S.token) { setCourt(); refresh().then(showWhatsNew); }
   }
 });
+
+// Tapping a notification while the app is open in the background.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data === 'lulu-open' && S.token) refresh().then(() => showWhatsNew(true));
+  });
+}
 
 setInterval(() => { if (S.token && !document.hidden && !S.sheet) refresh(); }, POLL_MS);
 

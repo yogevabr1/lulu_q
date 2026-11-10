@@ -139,6 +139,10 @@ async function ensureSchema(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS waits (
       id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
       answer TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, decided INTEGER)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, text TEXT NOT NULL,
+      tab TEXT, ref TEXT, created INTEGER NOT NULL, seen INTEGER)`),
+    db.prepare(`CREATE INDEX IF NOT EXISTS events_role ON events(role, id)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS checkins (
       id INTEGER PRIMARY KEY AUTOINCREMENT, decree_id INTEGER NOT NULL, title TEXT NOT NULL,
       queen_score INTEGER, queen_note TEXT, slave_score INTEGER, slave_note TEXT, created INTEGER NOT NULL)`)
@@ -279,7 +283,8 @@ async function listAll(env, role) {
       `SELECT id, title, note, status, created, decided FROM offers WHERE status = 'pending' OR decided > ? ORDER BY id DESC LIMIT 20`
     ).bind(since).all()).results,
     checkins: await checkinsFor(env.DB, role, since),
-    wait: await waitState(env.DB)
+    wait: await waitState(env.DB),
+    unseen: role ? (await env.DB.prepare('SELECT COUNT(*) AS c FROM events WHERE role = ? AND seen IS NULL').bind(role).first()).c : 0
   };
 }
 
@@ -300,14 +305,42 @@ async function endWait(db, now) {
   return stmts;
 }
 
+// What your ratings teach the ideas: acts you both loved, and acts either of you didn't.
+// Skips (0) are ignored. The best and worst go into the prompt as examples.
+async function tasteFromRatings(db) {
+  const rows = (await db.prepare(
+    `SELECT c.title, c.queen_score AS q, c.slave_score AS s, c.queen_note AS qn, c.slave_note AS sn, d.note AS what
+       FROM checkins c LEFT JOIN decrees d ON d.id = c.decree_id
+      WHERE c.queen_score > 0 AND c.slave_score > 0 ORDER BY c.id DESC LIMIT 200`
+  ).all()).results;
+  const words = (r) => [r.qn, r.sn].filter(Boolean).map((x) => x.slice(0, 80)).join(' / ');
+  const line = (r) => `${r.title}${r.what ? ` (${r.what.slice(0, 120)})` : ''} — ★${r.q}/${r.s}${words(r) ? ` — they said: ${words(r)}` : ''}`;
+  const loved = rows.filter((r) => r.q + r.s >= 8).sort((a, b) => b.q + b.s - (a.q + a.s)).slice(0, 12).map(line);
+  const disliked = rows.filter((r) => Math.min(r.q, r.s) <= 2).slice(0, 10).map(line);
+  return { loved, disliked, count: rows.length };
+}
+
+async function addEvents(db, roles, text, target = {}) {
+  const now = Date.now();
+  const list = Array.isArray(roles) ? roles : [roles];
+  await db.batch([
+    ...list.map((r) => db.prepare('INSERT INTO events (role, text, tab, ref, created) VALUES (?, ?, ?, ?, ?)')
+      .bind(r, String(text).slice(0, 200), target.tab || null, target.id != null ? String(target.id) : null, now)),
+    db.prepare('DELETE FROM events WHERE created < ?').bind(now - 60 * 24 * 3600 * 1000)
+  ]);
+}
+
 async function checkinsFor(db, role, since) {
   if (!role) return [];
-  const rows = (await db.prepare('SELECT * FROM checkins WHERE created > ? ORDER BY id DESC LIMIT 20').bind(since).all()).results;
+  const col = role === 'queen' ? 'queen_score' : 'slave_score';
+  const rows = (await db.prepare(
+    `SELECT * FROM checkins WHERE created > ? OR ${col} IS NULL ORDER BY id DESC LIMIT 60`
+  ).bind(since).all()).results;
   return rows.map((c) => {
     const both = c.queen_score != null && c.slave_score != null;
     const mine = role === 'queen' ? { score: c.queen_score, note: c.queen_note } : { score: c.slave_score, note: c.slave_note };
     const theirs = role === 'queen' ? { score: c.slave_score, note: c.slave_note } : { score: c.queen_score, note: c.queen_note };
-    return { id: c.id, title: c.title, created: c.created, mine, theirs: both ? theirs : null, both, answered: mine.score != null };
+    return { id: c.id, decreeId: c.decree_id, title: c.title, created: c.created, mine, theirs: both ? theirs : null, both, answered: mine.score != null };
   });
 }
 
@@ -317,7 +350,11 @@ async function handleApi(request, env, ctx, role, url) {
   const path = url.pathname.replace(/^\/api/, '');
   const method = request.method;
   const now = Date.now();
-  const push = (roles) => ctx.waitUntil(notify(env, roles, env.VAPID_SUBJECT || url.origin));
+  // Every notification is also saved as a readable event for the inbox.
+  const push = (roles, text, target) => ctx.waitUntil((async () => {
+    if (text) await addEvents(env.DB, roles, text, target);
+    await notify(env, roles, env.VAPID_SUBJECT || url.origin);
+  })());
 
   if (path === '/me' && method === 'GET') {
     const pin = await env.DB.prepare('SELECT role FROM pins WHERE role = ?').bind(role).first();
@@ -387,7 +424,7 @@ async function handleApi(request, env, ctx, role, url) {
     return json({ ok: true });
   }
   if (path === '/push/test' && method === 'POST') {
-    push([role]);
+    push([role], 'התראת בדיקה', { tab: 'limits' });
     return json({ ok: true });
   }
 
@@ -403,19 +440,19 @@ async function handleApi(request, env, ctx, role, url) {
       stmts.push(setSetting(env.DB, 'paused', b.paused ? 1 : 0));
       stmts.push(setSetting(env.DB, 'pausedBy', b.paused ? role : ''));
       if (b.paused) stmts.push(setSetting(env.DB, 'protocol', 0));
-      push([other(role)]);
+      push([other(role)], b.paused ? `${role === 'queen' ? 'המלכה' : 'העבד'} הפעיל/ה הפוגה` : 'ההפוגה הסתיימה', { tab: 'decrees' });
     }
     if (typeof b.mood === 'string') {
       if (role !== 'queen') return err(403, 'forbidden');
       if (!MOODS[b.mood]) return err(400, 'bad mood');
       stmts.push(setSetting(env.DB, 'mood', b.mood));
-      if (b.mood === 'waiting') push(['slave']);
+      if (b.mood === 'waiting') push(['slave'], 'המלכה מחכה לך', { tab: 'decrees' });
     }
     if (typeof b.protocol === 'boolean') {
       if (role !== 'queen') return err(403, 'forbidden');
       if (b.protocol && (await getSettings(env.DB)).paused) return err(409, 'paused');
       stmts.push(setSetting(env.DB, 'protocol', b.protocol ? 1 : 0));
-      if (b.protocol) { stmts.push(setSetting(env.DB, 'protocolSince', now)); push(['slave']); }
+      if (b.protocol) { stmts.push(setSetting(env.DB, 'protocolSince', now)); push(['slave'], 'הפרוטוקול פעיל', { tab: 'decrees' }); }
     }
     if (b.protocolLevel !== undefined) {
       if (role !== 'queen') return err(403, 'forbidden');
@@ -446,7 +483,7 @@ async function handleApi(request, env, ctx, role, url) {
     await env.DB.prepare(
       'INSERT INTO decrees (title, note, severity, deadline, created) VALUES (?, ?, ?, ?, ?)'
     ).bind(title, note, severity, deadline, now).run();
-    push(['slave']);
+    push(['slave'], `צו חדש: ${title}`, { tab: 'decrees', id: 'new' });
     return json(await listAll(env, role));
   }
 
@@ -495,7 +532,7 @@ async function handleApi(request, env, ctx, role, url) {
     const pending = (await env.DB.prepare(`SELECT COALESCE(SUM(cost), 0) AS t FROM redeems WHERE status = 'pending'`).first()).t;
     if (total - pending < item.cost) return err(409, 'not enough points');
     await env.DB.prepare('INSERT INTO redeems (item, cost, created) VALUES (?, ?, ?)').bind(b.item, item.cost, now).run();
-    push(['queen']);
+    push(['queen'], `העבד מבקש להמיר ${item.cost} נקודות: ${item.label}`, { tab: 'points' });
     return json(await listAll(env, role));
   }
   const xm = path.match(/^\/redeem\/(\d+)\/(approve|deny)$/);
@@ -509,8 +546,18 @@ async function handleApi(request, env, ctx, role, url) {
     if (xm[2] === 'approve') stmts.push(env.DB.prepare('INSERT INTO points (delta, reason, created) VALUES (?, ?, ?)')
       .bind(-rq.cost, 'הומר: ' + (REDEEM_ITEMS[rq.item]?.label || rq.item), now));
     await env.DB.batch(stmts);
-    push(['slave']);
+    push(['slave'], `${xm[2] === 'approve' ? 'המלכה אישרה' : 'המלכה סירבה ל'}המרה: ${REDEEM_ITEMS[rq.item]?.label || ''}`, { tab: 'points' });
     return json(await listAll(env, role));
+  }
+
+  // ----- notifications inbox -----
+  if (path === '/events' && method === 'GET') {
+    const rows = (await env.DB.prepare('SELECT id, text, tab, ref, created, seen FROM events WHERE role = ? ORDER BY id DESC LIMIT 80').bind(role).all()).results;
+    return json({ events: rows });
+  }
+  if (path === '/events/seen' && method === 'POST') {
+    await env.DB.prepare('UPDATE events SET seen = ? WHERE role = ? AND seen IS NULL').bind(now, role).run();
+    return json({ ok: true });
   }
 
   // ----- "what I'm doing now": the slave reports, the queen can demand an update -----
@@ -527,7 +574,7 @@ async function handleApi(request, env, ctx, role, url) {
       if (st.demandDue && now > st.demandDue) stmts.push(setSetting(env.DB, 'statusLateBy', now - st.demandDue));
     }
     await env.DB.batch(stmts);
-    push(['queen']);
+    push(['queen'], `העבד עכשיו: ${text}`, { tab: 'decrees', id: 'status' });
     return json(await listAll(env, role));
   }
   if (path === '/status/demand' && method === 'POST') {
@@ -537,7 +584,7 @@ async function handleApi(request, env, ctx, role, url) {
     await env.DB.batch([
       setSetting(env.DB, 'statusReqAt', now), setSetting(env.DB, 'statusReqDue', now + minutes * 60000), setSetting(env.DB, 'statusReqLate', '0')
     ]);
-    push(['slave']);
+    push(['slave'], `המלכה דורשת עדכון תוך ${minutes} דק׳`, { tab: 'decrees', id: 'status' });
     return json(await listAll(env, role));
   }
   if (path === '/status/late' && method === 'POST') {
@@ -546,7 +593,7 @@ async function handleApi(request, env, ctx, role, url) {
     const stmts = [setSetting(env.DB, 'statusLateBy', '')];
     if (b.penalize === true) stmts.push(env.DB.prepare('INSERT INTO points (delta, reason, created) VALUES (?, ?, ?)').bind(-5, 'עדכון סטטוס באיחור', now));
     await env.DB.batch(stmts);
-    if (b.penalize === true) push(['slave']);
+    if (b.penalize === true) push(['slave'], 'ירדו 5 נקודות על עדכון באיחור', { tab: 'points' });
     return json(await listAll(env, role));
   }
   if (path === '/status/cancel' && method === 'POST') {
@@ -572,13 +619,13 @@ async function handleApi(request, env, ctx, role, url) {
     if (w.pending) return err(409, 'already asked');
     const b = await readBody(request);
     await env.DB.prepare('INSERT INTO waits (note, created) VALUES (?, ?)').bind(cleanText(b.note, 300), now).run();
-    push(['queen']);
+    push(['queen'], 'העבד מבקש רשות', { tab: 'decrees', id: 'wait' });
     return json(await listAll(env, role));
   }
   if (path === '/wait/release' && method === 'POST') {
     if (role !== 'queen') return err(403, 'forbidden');
     await env.DB.batch(await endWait(env.DB, now));
-    push(['slave']);
+    push(['slave'], 'המלכה שחררה אותך — המונה אופס', { tab: 'decrees', id: 'wait' });
     return json(await listAll(env, role));
   }
   const wm = path.match(/^\/wait\/(\d+)\/(yes|no|later)$/);
@@ -592,7 +639,7 @@ async function handleApi(request, env, ctx, role, url) {
       .bind(wm[2], cleanText(b.answer, 300), now, row.id)];
     if (wm[2] === 'yes') stmts.push(...(await endWait(env.DB, now)));
     await env.DB.batch(stmts);
-    push(['slave']);
+    push(['slave'], `המלכה ענתה: ${{ yes: 'כן', no: 'לא', later: 'אולי מחר' }[wm[2]]}`, { tab: 'decrees', id: 'wait' });
     return json(await listAll(env, role));
   }
 
@@ -603,7 +650,7 @@ async function handleApi(request, env, ctx, role, url) {
     const title = cleanText(b.title, 200);
     if (!title) return err(400, 'title required');
     await env.DB.prepare('INSERT INTO offers (title, note, created) VALUES (?, ?, ?)').bind(title, cleanText(b.note, 1000), now).run();
-    push(['queen']);
+    push(['queen'], `הצעת שירות: ${title}`, { tab: 'decrees', id: 'offers' });
     return json(await listAll(env, role));
   }
   const om = path.match(/^\/offers\/(\d+)\/(accept|decline)$/);
@@ -623,7 +670,7 @@ async function handleApi(request, env, ctx, role, url) {
         .bind(o.title, o.note, severity, deadline, now));
     }
     await env.DB.batch(stmts);
-    push(['slave']);
+    push(['slave'], om[2] === 'accept' ? `המלכה הפכה את ההצעה לצו: ${o.title}` : `המלכה ויתרה על ההצעה: ${o.title}`, { tab: 'decrees' });
     return json(await listAll(env, role));
   }
 
@@ -642,27 +689,29 @@ async function handleApi(request, env, ctx, role, url) {
     await env.DB.prepare(
       'INSERT INTO decrees (title, note, severity, deadline, created, kind, deck, card_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     ).bind(card.title, card.text + (because ? ` (בעקבות: ${because})` : ''), lvlToSeverity(card.lvl), deadline, now, 'card', 'punish', card.id).run();
-    push(['slave']);
+    push(['slave'], `נשלף עונש: ${card.title}`, { tab: 'decrees', id: 'new' });
     return json({ ...(await listAll(env, role)), punished: { title: card.title, text: card.text } });
   }
 
-  // ----- check-ins after a strong session -----
+  // ----- ratings after a completed decree (0 = skipped) -----
   const km = path.match(/^\/checkins\/(\d+)$/);
   if (km && method === 'POST') {
     const b = await readBody(request);
     const score = Math.trunc(Number(b.score));
-    if (!(score >= 1 && score <= 5)) return err(400, 'score 1-5');
+    if (!(score >= 0 && score <= 5)) return err(400, 'score 0-5');
     const col = role === 'queen' ? 'queen' : 'slave';
     const res = await env.DB.prepare(`UPDATE checkins SET ${col}_score = ?, ${col}_note = ? WHERE id = ? AND ${col}_score IS NULL`)
-      .bind(score, cleanText(b.note, 500), Number(km[1])).run();
+      .bind(score, score ? cleanText(b.note, 500) : '', Number(km[1])).run();
     if ((res.meta?.changes ?? res.changes) !== 1) return err(409, 'already answered');
+    const row = await env.DB.prepare('SELECT queen_score, slave_score FROM checkins WHERE id = ?').bind(Number(km[1])).first();
+    if (row && row.queen_score != null && row.slave_score != null && score) push([other(role)], 'שניכם דירגתם — הדירוגים נחשפו', { tab: 'limits', id: 'ratings' });
     return json(await listAll(env, role));
   }
 
   // ----- expectation review -----
   // Kept for older pages: finishing just tells the other one, nothing is unlocked by it.
   if (path === '/review/done' && method === 'POST') {
-    push([other(role)]);
+    push([other(role)], `${role === 'queen' ? 'המלכה' : 'העבד'} סימן/ה קלפים בתיאום הציפיות`, { tab: 'limits' });
     return json(await cardsPayload(env.DB, role));
   }
 
@@ -694,16 +743,17 @@ async function handleApi(request, env, ctx, role, url) {
     const shuffle = (a) => a.map((x) => [Math.random(), x]).sort((m, n) => m[0] - n[0]).map((x) => x[1]);
     const approved = shuffle(pool).slice(0, 30).map((c) => `${c.title}: ${c.text}`);
     const refused = cards.filter((c) => c.votes.queen === 0 || c.votes.slave === 0).map((c) => c.title).slice(0, 80);
+    const taste = await tasteFromRatings(env.DB);
     const recent = (await env.DB.prepare('SELECT title FROM decrees WHERE created > ? ORDER BY id DESC LIMIT 30')
       .bind(now - 14 * 24 * 3600 * 1000).all()).results.map((r) => r.title);
     const out = await generateIdeas(env, {
       vibe: VIBES[b.vibe] ? b.vibe : 'playful', deckLabel: deck ? DECKS[deck].label : null, lvl,
-      wish: cleanText(b.wish, 300), approved, refused, recent,
+      wish: cleanText(b.wish, 300), approved, refused, recent, loved: taste.loved, disliked: taste.disliked,
       homeFree: settings.homeFree, protocolLevel: settings.protocol ? settings.protocolLevel : null,
       mode: role === 'slave' ? 'offer' : 'task', work
     });
     if (out.error) return err(502, out.error);
-    return json({ ideas: out.ideas, why: out.why || null, left: 39 - used });
+    return json({ ideas: out.ideas, why: out.why || null, left: 39 - used, learnedFrom: taste.count });
   }
 
   // ----- cards -----
@@ -720,7 +770,7 @@ async function handleApi(request, env, ctx, role, url) {
     if (!title || !deck) return err(400, 'title and deck required');
     await env.DB.prepare('INSERT INTO custom_cards (deck, lvl, title, text, created) VALUES (?, ?, ?, ?, ?)')
       .bind(deck, lvl, title, text, now).run();
-    push(['slave']);
+    push(['slave'], `קלף חדש בחפיסה: ${title} — אפשר לסמן ✓ או ✗`, { tab: 'decrees' });
     return json(await cardsPayload(env.DB, role));
   }
   const cm = path.match(/^\/cards\/([a-z]{2}\d{1,6})(?:\/(vote|send))?$/);
@@ -763,7 +813,7 @@ async function handleApi(request, env, ctx, role, url) {
       await env.DB.prepare(
         'INSERT INTO decrees (title, note, severity, deadline, created, kind, deck, card_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
       ).bind(card.title, card.text, lvlToSeverity(card.lvl), deadline, now, kind, card.deck, card.id).run();
-      push(['slave']);
+      push(['slave'], `${kind === 'reward' ? 'פרס' : 'קלף'} מהמלכה: ${card.title}`, { tab: 'decrees', id: 'new' });
       return json(await listAll(env, role));
     }
   }
@@ -795,7 +845,7 @@ async function handleApi(request, env, ctx, role, url) {
       if (!Number.isFinite(until) || until <= now || (d.deadline && until <= d.deadline) || until > now + 30 * 24 * 3600 * 1000) return err(400, 'bad time');
       await env.DB.prepare(`UPDATE decrees SET ext_status = 'pending', ext_until = ?, ext_reason = ?, ext_answer = '' WHERE id = ?`)
         .bind(until, reason, id).run();
-      push(['queen']);
+      push(['queen'], `בקשת הארכה: ${d.title}`, { tab: 'decrees', id });
       return json(await listAll(env, role));
     }
     if (action === 'extend-yes' || action === 'extend-no') {
@@ -808,7 +858,7 @@ async function handleApi(request, env, ctx, role, url) {
       } else {
         await env.DB.prepare(`UPDATE decrees SET ext_status = 'denied', ext_answer = ? WHERE id = ?`).bind(answer, id).run();
       }
-      push(['slave']);
+      push(['slave'], `${action === 'extend-yes' ? 'ההארכה אושרה' : 'ההארכה נדחתה'}: ${d.title}`, { tab: 'decrees', id });
       return json(await listAll(env, role));
     }
     if (action === 'start') {
@@ -816,7 +866,7 @@ async function handleApi(request, env, ctx, role, url) {
       if (d.status !== 'open') return err(409, 'not open');
       if (!d.started_at) {
         await env.DB.prepare('UPDATE decrees SET started_at = ? WHERE id = ?').bind(now, id).run();
-        push(['queen']);
+        push(['queen'], `העבד התחיל: ${d.title}`, { tab: 'decrees', id });
       }
       return json(await listAll(env, role));
     }
@@ -825,7 +875,7 @@ async function handleApi(request, env, ctx, role, url) {
       if (d.status !== 'open') return err(409, 'not open');
       await env.DB.prepare(`UPDATE decrees SET status = 'submitted', report = ?, submitted_at = ?, reject_reason = '' WHERE id = ?`)
         .bind(cleanText(b.report, 1000), now, id).run();
-      push(['queen']);
+      push(['queen'], `${d.kind === 'reward' ? 'העבד מבקש לממש' : 'הוגש לאישורך'}: ${d.title}`, { tab: 'decrees', id });
       return json(await listAll(env, role));
     }
     if (role !== 'queen') return err(403, 'forbidden');
@@ -840,23 +890,22 @@ async function handleApi(request, env, ctx, role, url) {
         .bind(points, (late ? 'בוצע באיחור: ' : 'בוצע: ') + d.title, id, now));
       if (bonus) stmts.push(env.DB.prepare('INSERT INTO points (delta, reason, decree_id, created) VALUES (?, ?, ?, ?)')
         .bind(bonus, 'מעבר לנדרש: ' + d.title, id, now));
-      // After a strong card (◆◆◆), both of you get a short private check-in.
-      if (d.kind === 'card' && d.severity === 'royal') stmts.push(env.DB.prepare(
-        'INSERT INTO checkins (decree_id, title, created) VALUES (?, ?, ?)').bind(id, d.title, now));
+      // After every completed decree, both of you rate it privately (stars + a few words).
+      stmts.push(env.DB.prepare('INSERT INTO checkins (decree_id, title, created) VALUES (?, ?, ?)').bind(id, d.title, now));
       await env.DB.batch(stmts);
-      push(['slave']);
+      push(['slave'], `אושר: ${d.title}${points + bonus ? ` · +${points + bonus}` : ''} — אפשר לדרג`, { tab: 'decrees', id });
       return json(await listAll(env, role));
     }
     if (action === 'reject') {
       if (d.status !== 'submitted') return err(409, 'not submitted');
       await env.DB.prepare(`UPDATE decrees SET status = 'open', reject_reason = ?, submitted_at = NULL, started_at = NULL WHERE id = ?`)
         .bind(cleanText(b.reason, 500) || 'לא מספיק טוב', id).run();
-      push(['slave']);
+      push(['slave'], `לא מספיק טוב: ${d.title}`, { tab: 'decrees', id });
       return json(await listAll(env, role));
     }
     if (action === 'remind') {
       await env.DB.prepare('UPDATE decrees SET reminded_at = ? WHERE id = ?').bind(now, id).run();
-      push(['slave']);
+      push(['slave'], `תזכורת חמורה: ${d.title}`, { tab: 'decrees', id });
       return json(await listAll(env, role));
     }
   }
@@ -893,11 +942,12 @@ export async function runSchedule(env) {
   await ensureSchema(env.DB);
   const now = Date.now();
   const subject0 = env.VAPID_SUBJECT || 'mailto:noreply@example.com';
-  if (await weeklySummary(env, now)) await notify(env, ['queen'], subject0);
+  if (await weeklySummary(env, now)) { await addEvents(env.DB, ['queen'], 'סיכום השבוע מוכן', { tab: 'decrees' }); await notify(env, ['queen'], subject0); }
   const settings = await getSettings(env.DB);
   const st = settings.status;
   if (st.demandDue && now > st.demandDue && !st.lateNotified) {
     await setSetting(env.DB, 'statusReqLate', '1').run();
+    await addEvents(env.DB, ['queen', 'slave'], 'הזמן לעדכון הסטטוס נגמר', { tab: 'decrees', id: 'status' });
     await notify(env, ['queen', 'slave'], subject0);
   }
   if (settings.paused) return;
@@ -928,9 +978,10 @@ export async function runSchedule(env) {
   }
   if (stmts.length) await env.DB.batch(stmts);
   const subject = env.VAPID_SUBJECT || 'mailto:noreply@example.com';
-  if (created) await notify(env, ['slave'], subject);
-  if (soon.results.length) await notify(env, ['slave'], subject);
-  if (late.results.length) await notify(env, ['slave', 'queen'], subject);
+  const titles = async (rows) => (await Promise.all(rows.map((r) => env.DB.prepare('SELECT title FROM decrees WHERE id = ?').bind(r.id).first()))).map((x) => x?.title).filter(Boolean);
+  if (created) { await addEvents(env.DB, ['slave'], created === 1 ? 'צו קבוע חדש להיום' : `${created} צווים קבועים להיום`, { tab: 'decrees', id: 'new' }); await notify(env, ['slave'], subject); }
+  if (soon.results.length) { await addEvents(env.DB, ['slave'], `נשארה פחות משעה: ${(await titles(soon.results)).join(', ')}`, { tab: 'decrees', id: soon.results[0].id }); await notify(env, ['slave'], subject); }
+  if (late.results.length) { await addEvents(env.DB, ['slave', 'queen'], `באיחור: ${(await titles(late.results)).join(', ')}`, { tab: 'decrees', id: late.results[0].id }); await notify(env, ['slave', 'queen'], subject); }
 }
 
 // ---------- entry ----------

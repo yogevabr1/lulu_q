@@ -187,3 +187,25 @@ details.guide p{margin:0 0 10px;font-size:15px;line-height:1.55;color:var(--soft
 .timer{font-variant-numeric:tabular-nums;font-weight:700;color:var(--gold);direction:ltr;unicode-bidi:isolate}
 .timer.late{color:var(--rose)}
 .st.doing{color:#7fa36b;font-weight:700}
+
+/* ---------- ratings ---------- */
+.stars{color:var(--gold);letter-spacing:2px;direction:ltr;unicode-bidi:isolate}
+.ratings{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:8px}
+.ratings p{margin:0;font-size:14px;color:var(--soft);display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline}
+.ratings b{font-family:'Bellefair',Georgia,serif;color:var(--muted);font-weight:400;min-width:44px}
+.ratings span:not(.stars):not(.when){flex-basis:100%;font-style:italic;color:var(--soft);padding-right:54px}
+.starpick{display:flex;justify-content:center;gap:6px;direction:ltr}
+.star{width:52px;height:52px;background:none;border:0;font-size:40px;line-height:1;color:var(--line2);cursor:pointer}
+.star.on{color:var(--gold)}
+
+/* ---------- notifications ---------- */
+.bell{position:relative}
+.bell .badge{position:absolute;top:-6px;left:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:var(--blood);color:#f6ece0;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:'Assistant',sans-serif}
+.evlist{display:flex;flex-direction:column}
+.evrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:baseline;text-align:right;width:100%;background:none;border:0;border-bottom:1px solid var(--line);padding:12px 4px;color:var(--soft);font:inherit;cursor:pointer;min-height:48px}
+.evrow .t{font-size:15px;line-height:1.4;overflow-wrap:anywhere}
+.evrow .d{font-size:12px;color:var(--faint);white-space:nowrap}
+.evrow.new .t{color:var(--text);font-weight:700}
+.evrow.new .t::before{content:'◆';color:var(--gold);font-size:10px;margin-left:8px;vertical-align:middle}
+.flash{animation:flash 1.8s ease-out}
+@keyframes flash{0%,30%{box-shadow:0 0 0 2px var(--gold)}100%{box-shadow:0 0 0 2px transparent}}
