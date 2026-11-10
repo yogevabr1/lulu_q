@@ -33,6 +33,23 @@ Answer with JSON only, no other text:
 {"ideas":[{"title":"...","text":"...","severity":"command","needsHome":false}]}`;
 
 // For the servant: things HE offers to do for her. She still decides.
+// The daily surprise challenge: small, remote, done the same day.
+const CHALLENGE_SYSTEM = `You help a married adult couple with a private, consensual dominance-and-submission game.
+The wife is "the queen" (המלכה). The husband serves her. Write THREE options for today's SURPRISE CHALLENGE: a small task she sends him during his workday (09:00–17:00) that he completes TODAY, away from her.
+
+Rules you never break:
+- Light and quick: a few minutes of effort at most, or a simple rule he keeps for the rest of the day.
+- Doable remotely while at work: messages or voice notes to her, a discreet rule, something he wears or carries, a reminder of her, anticipation for tonight, a report this evening.
+- Completely invisible to coworkers; nobody else involved; nothing that could embarrass him or break workplace rules. A private photo for her is fine only alone in a locked restroom, on his own phone.
+- Stay inside what they both approved (APPROVED shows their style). Never anything resembling REFUSED. Learn from LOVED, avoid DISLIKED. Not a repeat of RECENT.
+- Varied: the three options should feel different from each other (e.g. a report, a rule, something teasing).
+- Clear end: by a time today, a count, or a report tonight.
+- Natural Hebrew, addressing him as "אתה" and her as "המלכה". Title 1–3 words; text one or two short sentences.
+- severity is "request". needsHome is false.
+
+Answer with JSON only, no other text:
+{"ideas":[{"title":"...","text":"...","severity":"request","needsHome":false}]}`;
+
 const OFFER_SYSTEM = `You help a married adult couple with a private, consensual dominance-and-submission game they play at home.
 The wife is "the queen" (המלכה). The husband serves her. Here HE asks for ideas of what he could OFFER her — service, devotion, pampering, rituals, and (when the VIBE asks for it) teasing, sexual service, submission or degradation he puts himself through for her. She decides whether to accept.
 
@@ -78,7 +95,7 @@ export async function generateIdeas(env, { vibe, deckLabel, lvl, wish, approved,
       body: JSON.stringify({
         model: env.IDEAS_MODEL || 'claude-sonnet-5-5',
         max_tokens: 3000,
-        system: mode === 'offer' ? OFFER_SYSTEM : SYSTEM,
+        system: mode === 'offer' ? OFFER_SYSTEM : mode === 'challenge' ? CHALLENGE_SYSTEM : SYSTEM,
         messages: [{ role: 'user', content: user + (attempt ? '\n\nReply with the JSON object only.' : '') }]
       })
     });

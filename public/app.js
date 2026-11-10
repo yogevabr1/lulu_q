@@ -270,7 +270,7 @@ function card(d, q, now) {
     else if (d.status === 'submitted') actions = `<span class="st submitted">${reward ? 'ממתין לאישור המלכה…' : 'ממתין לחותם המלכה…'}</span>`;
     else actions = `<span class="st">${reward ? 'מומש' : 'המלכה מרוצה'}</span>`;
   }
-  const label = d.kind === 'card' || reward ? `<span class="sev ${reward ? 'command' : d.severity}">${reward ? 'פרס מהמלכה' : 'קלף · ' + esc(DECK_LABEL[d.deck] || '')}</span>` : `<span class="sev ${d.severity}">${SEV[d.severity]}</span>`;
+  const label = d.deck === 'challenge' ? '<span class="sev command">אתגר היום</span>' : d.kind === 'card' || reward ? `<span class="sev ${reward ? 'command' : d.severity}">${reward ? 'פרס מהמלכה' : 'קלף · ' + esc(DECK_LABEL[d.deck] || '')}</span>` : `<span class="sev ${d.severity}">${SEV[d.severity]}</span>`;
   const note = d.note ? `<p class="quote">${d.kind !== 'decree' ? '' : q ? 'הערתך: ' : 'הוראות המלכה: '}${esc(d.note)}</p>` : '';
   const report = d.status === 'submitted' && d.report ? `<p class="quote">דיווח העבד: ${esc(d.report)}</p>` : '';
   const rejected = d.status !== 'done' && d.status !== 'submitted' && d.rejectReason ? `<p class="quote red">${q ? 'דחית' : 'המלכה דחתה'}: ${esc(d.rejectReason)}</p>` : '';
@@ -312,6 +312,7 @@ function queenDecrees() {
       <div class="stat red"><b>${c('overdue')}</b><span>באיחור</span></div>
     </div>
     ${reviewBanner()}
+    ${challengeCard()}
     ${statusCard(true)}
     ${eveningPanel()}
     ${waitCard(true)}
@@ -331,6 +332,19 @@ const ritualWhen = (r) => (r.freq === 'daily' ? 'כל יום' : 'כל יום ' +
 
 const MOOD = { free: 'זמינה', busy: 'לא להפריע', waiting: 'מחכה לך' };
 
+function challengeCard() {
+  const c = S.data.challenge?.today;
+  if (!c || c.status !== 'proposed') return '';
+  return `<section class="hero" id="sec-challenge">
+    <span class="k">אתגר היום בהפתעה</span>
+    <h2>${esc(c.title)}</h2>
+    <p class="when" style="margin:0;font-size:15px;color:var(--soft)">${esc(c.text)}</p>
+    <button class="btn blood" data-act="chSend" data-id="${c.id}">שלחי לעבד</button>
+    <div class="row2"><button class="btn quiet" data-act="chAnother" data-id="${c.id}">אתגר אחר</button><button class="btn quiet" data-act="chDecline" data-id="${c.id}">לוותר היום</button></div>
+    <span class="when">העבד לא יודע על האתגר עד שתשלחי. אם לא תחליטי, הוא פשוט יפוג בחצות.</span>
+  </section>`;
+}
+
 function eveningPanel() {
   const st = S.data.settings;
   const moods = Object.entries(MOOD).map(([k, l]) => `<button class="chip${st.mood === k ? ' on' : ''}" data-act="mood" data-m="${k}">${l}</button>`).join('');
@@ -342,6 +356,14 @@ function eveningPanel() {
       <div class="chips" style="grid-template-columns:1.4fr repeat(3,minmax(0,1fr))">
         <button class="chip${st.protocol ? ' on' : ''}" data-act="protocol">${st.protocol ? 'כבי' : 'הפעילי'}</button>${lv}
       </div>
+    </div>
+    <div class="field">
+      <span class="lbl">אתגר יומי בהפתעה</span>
+      <div class="chips" style="grid-template-columns:1fr 1fr">
+        <button class="chip${S.data.challenge?.off ? '' : ' on'}" data-act="chToggle" ${S.data.challenge?.off ? '' : 'disabled'}>פעיל</button>
+        <button class="chip${S.data.challenge?.off ? ' on' : ''}" data-act="chToggle" ${S.data.challenge?.off ? 'disabled' : ''}>כבוי</button>
+      </div>
+      <span class="when">בשעה אקראית בין 9 ל־17 תקבלי הצעה לאתגר קליל לעבד. את מחליטה אם לשלוח.</span>
     </div>
   </section>`;
 }
@@ -1414,6 +1436,10 @@ app.addEventListener('click', async (e) => {
       return render();
     }
     case 'ideaGo': return askIdeas();
+    case 'chSend': { el.disabled = true; const r = await api(`/challenge/${id}/send`, { method: 'POST' }); return act(r, r.error === 'paused' ? 'הפוגה פעילה.' : 'האתגר נשלח לעבד'); }
+    case 'chAnother': { el.disabled = true; el.textContent = 'חושבת…'; const r = await api(`/challenge/${id}/another`, { method: 'POST' }); return act(r); }
+    case 'chDecline': { const r = await api(`/challenge/${id}/decline`, { method: 'POST' }); return act(r, 'אין אתגר היום'); }
+    case 'chToggle': { const r = await api('/challenge/toggle', { method: 'POST' }); return act(r); }
     case 'inbox': return openInbox(false);
     case 'inboxAll': S.sheet.onlyNew = false; return render();
     case 'evGo': return goTo(el.dataset.tab, el.dataset.ref);

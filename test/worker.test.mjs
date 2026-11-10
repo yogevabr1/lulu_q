@@ -37,6 +37,13 @@ globalThis.fetch = async (url, opts) => {
   if (String(url).startsWith('https://gone.example/')) return new Response(null, { status: 410 });
   if (String(url) === 'https://api.anthropic.com/v1/messages') {
     claudeCalls.push({ headers: opts.headers, body: JSON.parse(opts.body) });
+    if (/SURPRISE CHALLENGE/.test(JSON.parse(opts.body).system || '')) {
+      return new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify({ ideas: [
+        { title: 'שלך', text: 'שלח למלכה בשעה עגולה את המילה "שלך".', severity: 'request' },
+        { title: 'בלי רגל על רגל', text: 'היום אסור לך לשבת עם רגל על רגל.', severity: 'request' },
+        { title: 'שלושה רעיונות', text: 'עד 15:00 שלח למלכה שלושה רעיונות לערב.', severity: 'request' }
+      ] }) }] }));
+    }
     return new Response(JSON.stringify({ content: [{ type: 'text', text: 'הנה: {"ideas":[{"title":"כוס תה","text":"להכין למלכה תה לפני השינה.","severity":"request","needsHome":false},{"title":"","text":"ריק"}]}' }] }));
   }
   throw new Error('unexpected fetch ' + url);
@@ -622,4 +629,72 @@ test('notifications inbox: events per person, unseen count, mark seen', async ()
   assert.equal(r.data.unseen, 0);
   ev = (await call('/api/events', { token: SLAVE, lulu: s })).data.events;
   assert.ok(ev[0].seen); // still listed, now as seen
+});
+
+test('daily surprise challenge: proposed in the window, queen sends / swaps / declines, never sent without her', async () => {
+  await env.DB.prepare(`UPDATE settings SET value = '0' WHERE key = 'paused'`).run();
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const keyed = { ...env, ANTHROPIC_API_KEY: 'k' };
+  let q, s;
+  // Access tokens that outlive the fake clock.
+  const QL = await jwt('liorgra8@gmail.com', { exp: 2e9 });
+  const SL = await jwt('yogevabr@gmail.com', { exp: 2e9 });
+  // The fake clock jumps ahead, so unlock again on each simulated day.
+  const unlock = async () => {
+    await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+    q = (await call('/api/unlock', { token: QL, method: 'POST', body: { pin: '2468' } })).data.token;
+    s = (await call('/api/unlock', { token: SL, method: 'POST', body: { pin: '1357' } })).data.token;
+  };
+  const { runSchedule } = await import('../src/worker.js');
+  const realNow = Date.now;
+  const at = (iso) => { Date.now = () => Date.parse(iso); };
+  try {
+    // Day 1 (Israel time). Before 09:00 nothing happens.
+    at('2026-12-01T05:00:00Z'); await runSchedule(keyed);
+    assert.equal((await env.DB.prepare(`SELECT COUNT(*) AS c FROM challenges WHERE day = '2026-12-01'`).first()).c, 0);
+    // Force today's surprise time to 10:00 local, then run at 10:05.
+    await env.DB.prepare(`UPDATE settings SET value = ? WHERE key = 'challengePlan'`).bind('2026-12-01|' + Date.parse('2026-12-01T08:00:00Z')).run();
+    at('2026-12-01T08:05:00Z'); await runSchedule(keyed); await runSchedule(keyed);
+    assert.equal((await env.DB.prepare(`SELECT COUNT(*) AS c FROM challenges WHERE day = '2026-12-01'`).first()).c, 1);
+    await unlock();
+    let r = await call('/api/decrees', { token: QL, lulu: q, envOverride: keyed });
+    const c = r.data.challenge.today;
+    assert.deepEqual([c.title, c.status, c.spare], ['שלך', 'proposed', 2]);
+    assert.equal((await call('/api/decrees', { token: SL, lulu: s })).data.challenge.today, null); // he can't peek
+    assert.equal((await call(`/api/challenge/${c.id}/send`, { token: SL, lulu: s, method: 'POST' })).status, 403);
+    r = await call(`/api/challenge/${c.id}/another`, { token: QL, lulu: q, method: 'POST', envOverride: keyed });
+    assert.equal(r.data.challenge.today.title, 'בלי רגל על רגל');
+    r = await call(`/api/challenge/${c.id}/send`, { token: QL, lulu: q, method: 'POST', envOverride: keyed });
+    const d = r.data.decrees.find((x) => x.deck === 'challenge');
+    assert.equal(d.title, 'בלי רגל על רגל');
+    assert.equal(new Date(d.deadline).toISOString(), '2026-12-01T21:59:00.000Z'); // 23:59 local
+    assert.equal((await call(`/api/challenge/${c.id}/send`, { token: QL, lulu: q, method: 'POST', envOverride: keyed })).status, 409);
+
+    // Day 2: no decision → it is never sent, and lapses with the day.
+    await env.DB.prepare(`INSERT INTO settings (key, value) VALUES ('challengePlan', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .bind('2026-12-02|' + Date.parse('2026-12-02T07:00:00Z')).run();
+    at('2026-12-02T07:01:00Z'); await runSchedule(keyed);
+    at('2026-12-02T09:30:00Z'); await runSchedule(keyed);
+    at('2026-12-02T20:00:00Z'); await runSchedule(keyed);
+    const c2 = await env.DB.prepare(`SELECT * FROM challenges WHERE day = '2026-12-02'`).first();
+    assert.equal(c2.status, 'proposed');
+    assert.equal(c2.decree_id, null);
+    at('2026-12-03T06:00:00Z'); await unlock();
+    assert.equal((await call('/api/decrees', { token: QL, lulu: q, envOverride: keyed })).data.challenge.today, null); // gone the next day
+
+    // Day 3: declined; switched off → nothing on day 4.
+    await env.DB.prepare(`UPDATE settings SET value = ? WHERE key = 'challengePlan'`).bind('2026-12-03|' + Date.parse('2026-12-03T07:00:00Z')).run();
+    at('2026-12-03T07:01:00Z'); await runSchedule(keyed);
+    const c3 = await env.DB.prepare(`SELECT * FROM challenges WHERE day = '2026-12-03'`).first();
+    await unlock();
+    r = await call(`/api/challenge/${c3.id}/decline`, { token: QL, lulu: q, method: 'POST', envOverride: keyed });
+    assert.equal(r.data.challenge.today.status, 'declined');
+    r = await call('/api/challenge/toggle', { token: QL, lulu: q, method: 'POST', envOverride: keyed });
+    assert.equal(r.data.challenge.off, true);
+    await env.DB.prepare(`UPDATE settings SET value = ? WHERE key = 'challengePlan'`).bind('2026-12-04|' + Date.parse('2026-12-04T07:00:00Z')).run();
+    at('2026-12-04T08:00:00Z'); await runSchedule(keyed);
+    assert.equal((await env.DB.prepare(`SELECT COUNT(*) AS c FROM challenges WHERE day = '2026-12-04'`).first()).c, 0);
+  } finally { Date.now = realNow; }
+  await unlock();
+  await call('/api/challenge/toggle', { token: QL, lulu: q, method: 'POST' });
 });

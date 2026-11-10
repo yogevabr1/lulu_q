@@ -7,7 +7,7 @@ import {
 import { DECKS, CARDS } from './cards.js';
 import { notify, vapidKeys } from './push.js';
 import { generateIdeas, VIBES, checkKey } from './ideas.js';
-import { tzParts as _tz } from './logic.js';
+import { tzParts as _tz, localToUtc } from './logic.js';
 
 // ---------- responses ----------
 
@@ -139,6 +139,10 @@ async function ensureSchema(db) {
     db.prepare(`CREATE TABLE IF NOT EXISTS waits (
       id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
       answer TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, decided INTEGER)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS challenges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL,
+      spare TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'proposed',
+      created INTEGER NOT NULL, decided INTEGER, decree_id INTEGER)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL, text TEXT NOT NULL,
       tab TEXT, ref TEXT, created INTEGER NOT NULL, seen INTEGER)`),
@@ -284,6 +288,7 @@ async function listAll(env, role) {
     ).bind(since).all()).results,
     checkins: await checkinsFor(env.DB, role, since),
     wait: await waitState(env.DB),
+    challenge: await challengeFor(env.DB, role),
     unseen: role ? (await env.DB.prepare('SELECT COUNT(*) AS c FROM events WHERE role = ? AND seen IS NULL').bind(role).first()).c : 0
   };
 }
@@ -307,6 +312,90 @@ async function endWait(db, now) {
 
 // What your ratings teach the ideas: acts you both loved, and acts either of you didn't.
 // Skips (0) are ignored. The best and worst go into the prompt as examples.
+// ---------- daily surprise challenge ----------
+
+const dayKeyOf = (ms) => { const p = _tz(ms); return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
+const endOfDay = (ms) => { const p = _tz(ms); return localToUtc(p.y, p.m, p.d, 23, 59); };
+
+async function challengeFor(db, role) {
+  const off = (await db.prepare(`SELECT value FROM settings WHERE key = 'challengeOff'`).first())?.value === '1';
+  const c = await db.prepare('SELECT * FROM challenges WHERE day = ? ORDER BY id DESC LIMIT 1').bind(dayKeyOf(Date.now())).first();
+  if (!c || role !== 'queen') return { off, today: null };
+  return { off, today: { id: c.id, title: c.title, text: c.text, status: c.status, created: c.created, spare: JSON.parse(c.spare || '[]').length } };
+}
+
+// Asks Claude for three options; the first is today's, the others are spares for "another".
+async function makeChallengeOptions(env) {
+  const cards = await allCards(env.DB);
+  const pool = cards.filter((c) => c.enabled && !c.needsHome && ['rules', 'worship', 'service', 'feet', 'punish'].includes(c.deck));
+  const shuffle = (a) => a.map((x) => [Math.random(), x]).sort((m, n) => m[0] - n[0]).map((x) => x[1]);
+  const taste = await tasteFromRatings(env.DB);
+  const recent = (await env.DB.prepare('SELECT title FROM decrees WHERE created > ? ORDER BY id DESC LIMIT 30')
+    .bind(Date.now() - 14 * 24 * 3600 * 1000).all()).results.map((r) => r.title);
+  const recentChallenges = (await env.DB.prepare('SELECT title FROM challenges ORDER BY id DESC LIMIT 20').all()).results.map((r) => r.title);
+  const out = await generateIdeas(env, {
+    vibe: 'playful', deckLabel: null, lvl: 1, wish: '', mode: 'challenge',
+    approved: shuffle(pool).slice(0, 25).map((c) => `${c.title}: ${c.text}`),
+    refused: cards.filter((c) => c.votes.queen === 0 || c.votes.slave === 0).map((c) => c.title).slice(0, 80),
+    recent: [...recentChallenges, ...recent], loved: taste.loved, disliked: taste.disliked, homeFree: false, protocolLevel: null
+  });
+  return out.ideas || [];
+}
+
+// Sends today's challenge to him as a decree due at midnight.
+async function sendChallenge(env, c, now, auto) {
+  const res = await env.DB.prepare(`UPDATE challenges SET status = 'sent', decided = ? WHERE id = ? AND status = 'proposed'`).bind(now, c.id).run();
+  if ((res.meta?.changes ?? res.changes) !== 1) return false;
+  const ins = await env.DB.prepare(
+    `INSERT INTO decrees (title, note, severity, deadline, created, kind, deck) VALUES (?, ?, 'request', ?, ?, 'decree', 'challenge')`
+  ).bind(c.title, c.text, endOfDay(now), now).run();
+  const decreeId = ins.meta?.last_row_id ?? ins.lastInsertRowid;
+  await env.DB.prepare('UPDATE challenges SET decree_id = ? WHERE id = ?').bind(decreeId, c.id).run();
+  await addEvents(env.DB, ['slave'], `אתגר היום: ${c.title}`, { tab: 'decrees', id: decreeId });
+  if (auto) await addEvents(env.DB, ['queen'], `אתגר היום נשלח לעבד אוטומטית: ${c.title}`, { tab: 'decrees', id: decreeId });
+  return true;
+}
+
+// Runs every minute: picks today's surprise time (09:00–17:00) and proposes it to the queen.
+// Nothing is sent without her: an undecided challenge simply lapses at midnight.
+async function runChallenge(env, now, settings) {
+  if (!env.ANTHROPIC_API_KEY || settings.paused) return false;
+  const off = (await env.DB.prepare(`SELECT value FROM settings WHERE key = 'challengeOff'`).first())?.value === '1';
+  if (off) return false;
+  const day = dayKeyOf(now);
+  const p = _tz(now);
+  let plan = (await env.DB.prepare(`SELECT value FROM settings WHERE key = 'challengePlan'`).first())?.value || '';
+  if (!plan.startsWith(day + '|')) {
+    const r = new Uint32Array(1); crypto.getRandomValues(r);
+    const minutes = 9 * 60 + (r[0] % (8 * 60)); // 09:00–16:59
+    const at = localToUtc(p.y, p.m, p.d, Math.floor(minutes / 60), minutes % 60);
+    plan = `${day}|${at}`;
+    await setSetting(env.DB, 'challengePlan', plan).run();
+  }
+  const at = Number(plan.split('|')[1]);
+  const existing = await env.DB.prepare('SELECT * FROM challenges WHERE day = ? ORDER BY id DESC LIMIT 1').bind(day).first();
+  if (!existing) {
+    if (now < at || p.h >= 17) return false;
+    // Claim the day before the slow API call so two runs can't both propose.
+    const claim = await env.DB.prepare(
+      `INSERT INTO settings (key, value) VALUES ('challengeMade', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE value != excluded.value`
+    ).bind(day).run();
+    if ((claim.meta?.changes ?? claim.changes) !== 1) return false;
+    const opts = await makeChallengeOptions(env);
+    if (!opts.length) {
+      // Try again in 15 minutes rather than losing the day.
+      await env.DB.batch([setSetting(env.DB, 'challengeMade', ''), setSetting(env.DB, 'challengePlan', `${day}|${now + 15 * 60000}`)]);
+      return false;
+    }
+    const [first, ...rest] = opts;
+    await env.DB.prepare('INSERT INTO challenges (day, title, text, spare, created) VALUES (?, ?, ?, ?, ?)')
+      .bind(day, first.title, first.text, JSON.stringify(rest), now).run();
+    await addEvents(env.DB, ['queen'], 'אתגר היום מחכה להחלטה שלך', { tab: 'decrees', id: 'challenge' });
+    return 'queen';
+  }
+  return false;
+}
+
 async function tasteFromRatings(db) {
   const rows = (await db.prepare(
     `SELECT c.title, c.queen_score AS q, c.slave_score AS s, c.queen_note AS qn, c.slave_note AS sn, d.note AS what
@@ -693,6 +782,39 @@ async function handleApi(request, env, ctx, role, url) {
     return json({ ...(await listAll(env, role)), punished: { title: card.title, text: card.text } });
   }
 
+  // ----- daily surprise challenge (queen decides) -----
+  if (path === '/challenge/toggle' && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    const off = (await env.DB.prepare(`SELECT value FROM settings WHERE key = 'challengeOff'`).first())?.value === '1';
+    await setSetting(env.DB, 'challengeOff', off ? '0' : '1').run();
+    return json(await listAll(env, role));
+  }
+  const chm = path.match(/^\/challenge\/(\d+)\/(send|another|decline)$/);
+  if (chm && method === 'POST') {
+    if (role !== 'queen') return err(403, 'forbidden');
+    const c = await env.DB.prepare('SELECT * FROM challenges WHERE id = ?').bind(Number(chm[1])).first();
+    if (!c) return err(404, 'not found');
+    if (c.status !== 'proposed') return err(409, 'already decided');
+    if (chm[2] === 'send') {
+      if ((await getSettings(env.DB)).paused) return err(409, 'paused');
+      await sendChallenge(env, c, now, false);
+      ctx.waitUntil(notify(env, ['slave'], env.VAPID_SUBJECT || url.origin));
+    } else if (chm[2] === 'decline') {
+      await env.DB.prepare(`UPDATE challenges SET status = 'declined', decided = ? WHERE id = ?`).bind(now, c.id).run();
+    } else {
+      let spare = JSON.parse(c.spare || '[]');
+      if (!spare.length) {
+        if (!env.ANTHROPIC_API_KEY) return err(503, 'not configured');
+        spare = await makeChallengeOptions(env);
+        if (!spare.length) return err(502, 'no ideas');
+      }
+      const [next, ...rest] = spare;
+      await env.DB.prepare('UPDATE challenges SET title = ?, text = ?, spare = ? WHERE id = ?')
+        .bind(next.title, next.text, JSON.stringify(rest), c.id).run();
+    }
+    return json(await listAll(env, role));
+  }
+
   // ----- ratings after a completed decree (0 = skipped) -----
   const km = path.match(/^\/checkins\/(\d+)$/);
   if (km && method === 'POST') {
@@ -950,6 +1072,10 @@ export async function runSchedule(env) {
     await addEvents(env.DB, ['queen', 'slave'], 'הזמן לעדכון הסטטוס נגמר', { tab: 'decrees', id: 'status' });
     await notify(env, ['queen', 'slave'], subject0);
   }
+  try {
+    const ch = await runChallenge(env, now, settings);
+    if (ch) await notify(env, ch === 'both' ? ['queen', 'slave'] : ['queen'], subject0);
+  } catch (e) { console.error('challenge', e); }
   if (settings.paused) return;
   const soon = await env.DB.prepare(
     `SELECT id FROM decrees WHERE status = 'open' AND deadline IS NOT NULL AND deadline > ? AND deadline <= ? AND notified_soon IS NULL`
