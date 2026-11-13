@@ -261,10 +261,17 @@ function card(d, q, now) {
       actions = `<div class="row2"><button class="btn red" data-act="remind" data-id="${d.id}" ${sent ? 'disabled' : ''}>${sent ? 'התזכורת נשלחה' : 'תזכורת חמורה'}</button>
         <button class="btn blood" style="font-size:16px;min-height:44px" data-act="punish" data-id="${d.id}">שלפי עונש</button></div>`;
     }
+    if (d.status === 'open' || late) {
+      const soft = d.nudgedAt && now - d.nudgedAt < 3600 * 1000;
+      actions = `<span class="seen">${d.seenAt ? `👁 ראה ב־${hhmm(new Date(d.seenAt))}` : 'עוד לא אישר שראה'}</span>`
+        + `<button class="btn quiet" data-act="nudge" data-id="${d.id}" ${soft ? 'disabled' : ''}>${soft ? `נשלחה תזכורת עדינה · ${hhmm(new Date(d.nudgedAt))}` : '♡ תזכורת עדינה'}</button>` + actions;
+    }
     if (d.status !== 'done') actions += `<button class="link" data-act="del" data-id="${d.id}">בטלי את הצו</button>`;
   } else {
     if (reward && (d.status === 'open' || late)) actions = `<button class="btn gold" data-act="submit" data-id="${d.id}">לבקש לממש</button>`;
-    else if ((d.status === 'open' || late) && !d.startedAt) actions = `<button class="btn gold" data-act="start" data-id="${d.id}">▶ מבצע</button>`;
+    else if ((d.status === 'open' || late) && !d.startedAt) actions = d.seenAt
+      ? `<span class="seen">👁 אישרת שראית · ${hhmm(new Date(d.seenAt))}</span><button class="btn gold" data-act="start" data-id="${d.id}">▶ מבצע</button>`
+      : `<div class="row2"><button class="btn" data-act="seen" data-id="${d.id}">👁 ראיתי</button><button class="btn gold" data-act="start" data-id="${d.id}">▶ מבצע</button></div>`;
     else if (d.status === 'open' || late) actions = `<span class="st submitted">מבצע מ־${hhmm(new Date(d.startedAt))}</span>
       <button class="btn" data-act="submit" data-id="${d.id}" style="display:flex;align-items:center;justify-content:center;gap:8px">${icon.check}סיימתי — הגש לאישורה</button>`;
     else if (d.status === 'submitted') actions = `<span class="st submitted">${reward ? 'ממתין לאישור המלכה…' : 'ממתין לחותם המלכה…'}</span>`;
@@ -287,6 +294,9 @@ function card(d, q, now) {
       : `<span class="st submitted">ביקשת הארכה עד ${fmtWhen(ex.until)} — ממתין למלכה</span>`;
   } else if (ex && ex.status !== 'pending' && openish && !q) {
     extHtml = `<p class="quote${ex.status === 'denied' ? ' red' : ''}">${ex.status === 'approved' ? 'המלכה אישרה הארכה' : 'המלכה סירבה להארכה'}${ex.answer ? `: ${esc(ex.answer)}` : ''}</p>`;
+  }
+  if (!q && openish && d.nudgedAt && now - d.nudgedAt < 12 * 3600 * 1000) {
+    extHtml = `<p class="quote soft">♡ המלכה הזכירה לך בעדינות · ${hhmm(new Date(d.nudgedAt))}</p>` + extHtml;
   }
   if (!q && openish && !reward && d.deadline && !(ex && ex.status === 'pending')) {
     actions += `<button class="link" data-act="extAsk" data-id="${d.id}">בקשת הארכה</button>`;
@@ -768,7 +778,7 @@ const TOUR = {
   queen: [
     ['ברוכה הבאה לחדר הכס', ['כאן את גוזרת, העבד מבצע, ורק את מאשרת.', 'זה כלי עזר למשחק שלכם, לא המשחק עצמו. מותר לכבות אותו לימים.']],
     ['גזירה', ['היהלום האדום שבתחתית פותח גזירה חדשה: משימה, עד מתי, וחומרה (בקשה, פקודה, צו מלכותי).', 'אפשר לבחור "כל יום" או "כל שבוע" — והצו ייווצר לבד, עם טקסים מוצעים כמו קפה למיטה או דיווח ערב.']],
-    ['אישור', ['כשהעבד מגיש, הצו מופיע בזהב עם הדיווח שלו. "אשרי ביצוע" — אפשר עם בונוס. "לא מספיק טוב" — חוזר לביצוע, ואפשר גם עם עונש.', 'צו באיחור? "תזכורת חמורה" או "שלפי עונש" — קלף עונש מאושר נשלף ונשלח בלחיצה.']],
+    ['אישור', ['כשהעבד מגיש, הצו מופיע בזהב עם הדיווח שלו. "אשרי ביצוע" — אפשר עם בונוס. "לא מספיק טוב" — חוזר לביצוע, ואפשר גם עם עונש.', 'על כל צו פתוח תראי אם העבד אישר שראה, ואפשר לשלוח "♡ תזכורת עדינה" (פעם בשעה).', 'צו באיחור? "תזכורת חמורה" או "שלפי עונש" — קלף עונש מאושר נשלף ונשלח בלחיצה.']],
     ['קלפים', ['מסך "קלפים": שבע חפיסות, מסנן עוצמה (◆ עד ◆◆◆), שליפה אקראית או בחירה, ו"הענקי לעבד".', 'השפלה, כאב ומים — רק כשמסומן "הבית פנוי". ב"+ קלף משלך" מוסיפים קלפים חדשים.']],
     ['נקודות', ['העבד צובר על צווים שבוצעו, ומפסיד על הפרות. במסך "נקודות" יש כפתורים מהירים: בונוס, פנייה שגויה, ויכוח.', 'כשהעבד מבקש להמיר נקודות — הבקשה מופיעה אצלך. את מחליטה.']],
     ['מצב הערב', ['למעלה במסך הצווים: מצב המלכה (זמינה, לא להפריע, מחכה לך) ומתג הפרוטוקול עם עוצמה לערב.', 'העבד יכול להציע שירות ביוזמתו — את הופכת לצו או מוותרת.']],
@@ -778,7 +788,7 @@ const TOUR = {
   ],
   slave: [
     ['יומן העבד', ['כאן אתה רואה מה המלכה גזרה, ועד מתי. אתה מבצע ומגיש — רק היא מאשרת.', 'זה כלי עזר למשחק שלכם, לא המשחק עצמו.']],
-    ['הצווים', ['למעלה — הצו הבא וכמה זמן נשאר. "ביצעתי — הגש לאישורה" שולח לה, עם דיווח אם תרצה.', 'אם היא דוחה, הצו חוזר אליך עם הסיבה. איחור — אדום, ואולי עונש.']],
+    ['הצווים', ['כשמגיע צו — "👁 ראיתי" מודיע למלכה שקיבלת. "▶ מבצע" כשאתה מתחיל, ו"סיימתי — הגש לאישורה" בסוף.', 'אם היא דוחה, הצו חוזר אליך עם הסיבה. איחור — אדום, ואולי עונש.']],
     ['קלפים ופרסים', ['קלפים שהמלכה שולפת מגיעים אליך כצווים, עם החפיסה שלהם.', 'פרס מגיע בזהב — "לבקש לממש" כשתרצה להשתמש בו.']],
     ['נקודות', ['בקשה 5, פקודה 10, צו מלכותי 20 — וחצי באיחור. הפרות מורידות.', 'במסך "נקודות" אפשר לבקש להמיר. המלכה רשאית לסרב.']],
     ['מצב המלכה והצעת שירות', ['למעלה תראה את מצב המלכה, ומתי הפרוטוקול פעיל — אז פונים רק "המלכה".', '"הצעת שירות" — אתה מציע משהו ביוזמתך, והיא מחליטה אם זה הופך לצו. אין רעיון? ✨ רעיונות לשירות.']],
@@ -1597,6 +1607,8 @@ app.addEventListener('click', async (e) => {
       if (p2.error) return act(r, 'הצו חזר לביצוע. לא נמצא קלף עונש מאושר.');
       return act(p2, `הצו חזר, ונשלף: ${p2.punished.title}`);
     }
+    case 'seen': { el.disabled = true; const r = await api(`/decrees/${id}/seen`, { method: 'POST' }); return act(r, 'המלכה תראה שראית'); }
+    case 'nudge': { el.disabled = true; const r = await api(`/decrees/${id}/nudge`, { method: 'POST' }); return act(r, 'נשלחה תזכורת עדינה ♡'); }
     case 'remind': { el.disabled = true; const r = await api(`/decrees/${id}/remind`, { method: 'POST' }); return act(r, 'התזכורת נשלחה'); }
     case 'del': {
       if (!confirm('לבטל את הצו?')) return;

@@ -540,6 +540,31 @@ test('decree steps: waiting → doing → submitted; reject resets to waiting', 
   assert.equal(get(r).startedAt, null);
 });
 
+test('seen confirmation and gentle reminder', async () => {
+  await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
+  const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
+  const s = (await call('/api/unlock', { token: SLAVE, method: 'POST', body: { pin: '1357' } })).data.token;
+  let r = await call('/api/decrees', { token: QUEEN, lulu: q, method: 'POST', body: { title: 'להכין תה' } });
+  const id = r.data.decrees.find((d) => d.title === 'להכין תה').id;
+  const get = (res) => res.data.decrees.find((d) => d.id === id);
+  assert.equal(get(r).seenAt, null);
+  assert.equal((await call(`/api/decrees/${id}/seen`, { token: QUEEN, lulu: q, method: 'POST' })).status, 403);
+  r = await call(`/api/decrees/${id}/seen`, { token: SLAVE, lulu: s, method: 'POST' });
+  const seen = get(r).seenAt; assert.ok(seen);
+  r = await call(`/api/decrees/${id}/seen`, { token: SLAVE, lulu: s, method: 'POST' });
+  assert.equal(get(r).seenAt, seen, 'seen only once');
+  await flush();
+  const ev = (await call('/api/events', { token: QUEEN, lulu: q })).data.events;
+  assert.ok(ev.some((e) => e.text === 'העבד ראה: להכין תה'));
+  assert.equal((await call(`/api/decrees/${id}/nudge`, { token: SLAVE, lulu: s, method: 'POST' })).status, 403);
+  r = await call(`/api/decrees/${id}/nudge`, { token: QUEEN, lulu: q, method: 'POST' });
+  assert.ok(get(r).nudgedAt);
+  assert.equal((await call(`/api/decrees/${id}/nudge`, { token: QUEEN, lulu: q, method: 'POST' })).status, 429);
+  await flush();
+  const sev = (await call('/api/events', { token: SLAVE, lulu: s })).data.events;
+  assert.ok(sev.some((e) => e.text === 'המלכה מזכירה בעדינות: להכין תה'));
+});
+
 test('extension: slave asks with a reason, queen approves (deadline moves) or denies', async () => {
   await env.DB.prepare('UPDATE pins SET fails = 0, locked_until = 0').run();
   const q = (await call('/api/unlock', { token: QUEEN, method: 'POST', body: { pin: '2468' } })).data.token;
